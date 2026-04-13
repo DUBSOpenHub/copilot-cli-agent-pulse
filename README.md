@@ -1,6 +1,6 @@
 # ⚡ Agent Pulse
 
-**Real-time agent tracking dashboard for GitHub Copilot CLI**
+**Real-time agent tracking dashboard for the GitHub Copilot CLI**
 
 <div align="center">
 
