@@ -174,14 +174,8 @@ section{position:relative;padding:6rem 1.5rem}
   background-size:200% 100%;
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;
   background-clip:text;
-  animation:pulseText 1.5s ease-in-out infinite,pulseShift 4s linear infinite;
+  animation:pulseShift 4s linear infinite;
   filter:drop-shadow(0 0 20px rgba(0,245,255,.5)) drop-shadow(0 0 40px rgba(255,0,255,.3));
-}
-@keyframes pulseText{
-  0%,100%{transform:scale(1);filter:drop-shadow(0 0 15px rgba(0,245,255,.4)) drop-shadow(0 0 30px rgba(255,0,255,.2))}
-  15%{transform:scale(1.03);filter:drop-shadow(0 0 30px rgba(0,245,255,.8)) drop-shadow(0 0 60px rgba(255,0,255,.5))}
-  30%{transform:scale(1);filter:drop-shadow(0 0 15px rgba(0,245,255,.4)) drop-shadow(0 0 30px rgba(255,0,255,.2))}
-  45%{transform:scale(1.02);filter:drop-shadow(0 0 25px rgba(0,245,255,.6)) drop-shadow(0 0 50px rgba(255,0,255,.4))}
 }
 @keyframes pulseShift{
   0%{background-position:0% 50%}
