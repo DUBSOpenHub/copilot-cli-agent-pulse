@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Pulse — Real-Time Agent Dashboard for GitHub Copilot CLI</title>
+<meta name="description" content="Agent Pulse is a real-time terminal dashboard for monitoring GitHub Copilot CLI agents. Track sessions, agent types, trends, and velocity in a stunning TUI.">
+<meta name="keywords" content="GitHub Copilot, CLI, agent, dashboard, terminal, monitoring, real-time">
+<meta name="author" content="DUBSOpenHub">
+<meta property="og:title" content="Agent Pulse — Real-Time Agent Dashboard for GitHub Copilot CLI">
+<meta property="og:description" content="A stunning real-time terminal dashboard for monitoring GitHub Copilot CLI agents. Track sessions, agents, trends, and velocity.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://github.com/DUBSOpenHub/copilot-cli-agent-pulse">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Agent Pulse — Real-Time Agent Dashboard">
+<meta name="twitter:description" content="Real-time terminal dashboard for monitoring GitHub Copilot CLI agents.">
+<meta name="theme-color" content="#00f5ff">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Base ─────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#050510;--bg2:#0a0a1a;--bg3:#0f0f2a;
+  --cyan:#00f5ff;--green:#00ff87;--pink:#ff00ff;--red:#ff5f5f;--yellow:#ffd700;--orange:#ff8c00;
+  --text:#e0e0ff;--text-dim:#6a6a8a;
+  --font-display:'Orbitron',sans-serif;
+  --font-mono:'JetBrains Mono',monospace;
+  --font-body:'Inter',sans-serif;
+}
+html{scroll-behavior:smooth;font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:var(--font-body);overflow-x:hidden;line-height:1.6}
+a{color:var(--cyan);text-decoration:none;transition:color .3s}
+a:hover{color:var(--green)}
+::selection{background:rgba(0,245,255,.25);color:#fff}
+
+/* ── Scanline Overlay ─────────────────────────────────── */
+body::after{
+  content:'';position:fixed;inset:0;z-index:9999;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.06) 2px,rgba(0,0,0,.06) 4px);
+}
+
+/* ── Tron Grid Background ────────────────────────────── */
+.grid-bg{
+  position:fixed;inset:0;z-index:-2;overflow:hidden;
+}
+.grid-bg::before{
+  content:'';position:absolute;left:50%;bottom:0;width:200%;height:80vh;
+  transform:translateX(-50%) perspective(500px) rotateX(60deg);transform-origin:bottom center;
+  background:
+    repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(0,245,255,.07) 59px,rgba(0,245,255,.07) 60px),
+    repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(0,245,255,.07) 59px,rgba(0,245,255,.07) 60px);
+  animation:gridScroll 20s linear infinite;
+}
+.grid-bg::after{
+  content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at 50% 0%,rgba(0,245,255,.06) 0%,transparent 60%),
+    radial-gradient(ellipse at 20% 50%,rgba(255,0,255,.04) 0%,transparent 50%),
+    radial-gradient(ellipse at 80% 80%,rgba(0,255,135,.04) 0%,transparent 50%);
+}
+@keyframes gridScroll{
+  0%{background-position:0 0,0 0}
+  100%{background-position:0 60px,0 60px}
+}
+
+/* ── Floating Particles ──────────────────────────────── */
+.particles{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
+.particle{
+  position:absolute;border-radius:50%;
+  animation:floatUp linear infinite;
+  opacity:0;
+}
+@keyframes floatUp{
+  0%{transform:translateY(100vh) scale(0);opacity:0}
+  10%{opacity:1}
+  90%{opacity:1}
+  100%{transform:translateY(-10vh) scale(1);opacity:0}
+}
+
+/* ── Navigation ──────────────────────────────────────── */
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:1000;
+  background:rgba(5,5,16,.85);backdrop-filter:blur(20px);
+  border-bottom:1px solid rgba(0,245,255,.15);
+  transition:box-shadow .3s;
+}
+nav.scrolled{box-shadow:0 0 30px rgba(0,245,255,.15)}
+.nav-inner{
+  max-width:1200px;margin:0 auto;padding:.75rem 1.5rem;
+  display:flex;align-items:center;justify-content:space-between;
+}
+.nav-logo{font-family:var(--font-display);font-weight:900;font-size:1.1rem;color:var(--cyan);
+  text-shadow:0 0 10px rgba(0,245,255,.5);display:flex;align-items:center;gap:.5rem}
+.nav-logo .pulse-dot{
+  width:8px;height:8px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 8px var(--green);animation:pulse 2s ease-in-out infinite;
+}
+.nav-links{display:flex;gap:1.5rem;list-style:none;align-items:center}
+.nav-links a{
+  font-size:.85rem;font-weight:600;color:var(--text-dim);
+  transition:color .3s,text-shadow .3s;position:relative;
+}
+.nav-links a.active,.nav-links a:hover{color:var(--cyan);text-shadow:0 0 8px rgba(0,245,255,.5)}
+.nav-links a::after{
+  content:'';position:absolute;bottom:-4px;left:0;right:0;height:2px;
+  background:var(--cyan);transform:scaleX(0);transition:transform .3s;
+}
+.nav-links a.active::after{transform:scaleX(1)}
+.nav-toggle{display:none;background:none;border:none;color:var(--cyan);font-size:1.5rem;cursor:pointer}
+@media(max-width:768px){
+  .nav-links{
+    position:fixed;top:56px;left:0;right:0;background:rgba(5,5,16,.95);
+    flex-direction:column;padding:1.5rem;gap:1rem;
+    transform:translateY(-120%);transition:transform .3s;backdrop-filter:blur(20px);
+    border-bottom:1px solid rgba(0,245,255,.15);
+  }
+  .nav-links.open{transform:translateY(0)}
+  .nav-toggle{display:block}
+}
+
+/* ── Sections ────────────────────────────────────────── */
+section{position:relative;padding:6rem 1.5rem}
+.container{max-width:1100px;margin:0 auto}
+.section-tag{
+  font-family:var(--font-mono);font-size:.75rem;color:var(--pink);
+  text-transform:uppercase;letter-spacing:3px;margin-bottom:.75rem;
+  display:flex;align-items:center;gap:.5rem;
+}
+.section-tag::before{content:'//';color:var(--text-dim)}
+.section-title{
+  font-family:var(--font-display);font-size:clamp(1.5rem,4vw,2.5rem);font-weight:900;
+  margin-bottom:1rem;
+}
+.glow-cyan{color:var(--cyan);text-shadow:0 0 10px rgba(0,245,255,.4)}
+.glow-green{color:var(--green);text-shadow:0 0 10px rgba(0,255,135,.4)}
+.glow-pink{color:var(--pink);text-shadow:0 0 10px rgba(255,0,255,.4)}
+
+/* ── Scroll Reveal ───────────────────────────────────── */
+.reveal{opacity:0;transform:translateY(40px);transition:opacity .8s ease,transform .8s ease}
+.reveal.visible{opacity:1;transform:translateY(0)}
+.reveal-delay-1{transition-delay:.1s}
+.reveal-delay-2{transition-delay:.2s}
+.reveal-delay-3{transition-delay:.3s}
+.reveal-delay-4{transition-delay:.4s}
+.reveal-delay-5{transition-delay:.5s}
+
+/* ═══════════════════════════════════════════════════════ */
+/* ── HERO ─────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════ */
+#hero{
+  min-height:100vh;display:flex;align-items:center;justify-content:center;
+  text-align:center;padding-top:5rem;
+}
+.hero-content{position:relative}
+.hero-badge{
+  display:inline-block;font-family:var(--font-mono);font-size:.75rem;
+  color:var(--green);border:1px solid rgba(0,255,135,.3);
+  padding:.35rem 1rem;border-radius:999px;margin-bottom:1.5rem;
+  background:rgba(0,255,135,.05);
+  animation:pulse 3s ease-in-out infinite;
+}
+.hero-title{
+  font-family:var(--font-display);font-weight:900;
+  font-size:clamp(2.5rem,8vw,6rem);line-height:1.1;
+  color:#fff;margin-bottom:1rem;
+  text-shadow:0 0 20px rgba(0,245,255,.5),0 0 60px rgba(0,245,255,.2),0 0 100px rgba(0,245,255,.1);
+  animation:titleGlow 4s ease-in-out infinite alternate;
+}
+@keyframes titleGlow{
+  0%{text-shadow:0 0 20px rgba(0,245,255,.5),0 0 60px rgba(0,245,255,.2)}
+  100%{text-shadow:0 0 30px rgba(0,245,255,.7),0 0 80px rgba(0,245,255,.3),0 0 120px rgba(0,245,255,.15)}
+}
+.hero-sub{
+  font-size:clamp(1rem,2.5vw,1.35rem);color:var(--text-dim);
+  max-width:600px;margin:0 auto 1.5rem;font-weight:300;
+}
+.hero-sub strong{color:var(--text);font-weight:600}
+
+/* Pulse Wave */
+.pulse-wave{
+  font-family:var(--font-mono);font-size:1.5rem;
+  color:var(--cyan);margin-bottom:2.5rem;
+  text-shadow:0 0 8px rgba(0,245,255,.6);
+  height:2rem;overflow:hidden;
+}
+.pulse-wave span{
+  display:inline-block;animation:waveChar 2s ease-in-out infinite;
+}
+
+@keyframes waveChar{
+  0%,100%{opacity:.3;transform:scaleY(.6)}
+  50%{opacity:1;transform:scaleY(1)}
+}
+
+/* Heartbeat */
+.heartbeat{
+  font-size:1.5rem;margin-bottom:2rem;
+  animation:heartbeatAnim 1.5s ease-in-out infinite;
+}
+@keyframes heartbeatAnim{
+  0%,100%{transform:scale(1)}
+  15%{transform:scale(1.15)}
+  30%{transform:scale(1)}
+  45%{transform:scale(1.1)}
+}
+
+/* CTA Buttons */
+.cta-group{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap}
+.btn{
+  font-family:var(--font-display);font-size:.85rem;font-weight:700;
+  padding:.85rem 2rem;border-radius:6px;cursor:pointer;
+  transition:all .3s;text-transform:uppercase;letter-spacing:1px;
+  display:inline-flex;align-items:center;gap:.5rem;
+}
+.btn-primary{
+  background:linear-gradient(135deg,var(--cyan),#0088aa);color:var(--bg);
+  border:none;box-shadow:0 0 20px rgba(0,245,255,.3);
+}
+.btn-primary:hover{
+  box-shadow:0 0 40px rgba(0,245,255,.5);transform:translateY(-2px);color:var(--bg)
+}
+.btn-outline{
+  background:transparent;color:var(--cyan);
+  border:2px solid rgba(0,245,255,.4);
+}
+.btn-outline:hover{
+  background:rgba(0,245,255,.1);border-color:var(--cyan);
+  box-shadow:0 0 20px rgba(0,245,255,.2);transform:translateY(-2px);color:var(--cyan)
+}
+
+/* ═══════════════════════════════════════════════════════ */
+/* ── TERMINAL DEMO ───────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════ */
+#demo{background:var(--bg2)}
+.terminal{
+  background:#0c0c1e;border:1px solid rgba(0,245,255,.2);
+  border-radius:12px;overflow:hidden;
+  box-shadow:0 0 40px rgba(0,245,255,.1),0 20px 60px rgba(0,0,0,.5);
+  max-width:900px;margin:2rem auto 0;
+}
+.terminal-bar{
+  background:rgba(0,245,255,.05);padding:.6rem 1rem;
+  display:flex;align-items:center;gap:.5rem;
+  border-bottom:1px solid rgba(0,245,255,.1);
+}
+.terminal-dot{width:12px;height:12px;border-radius:50%}
+.terminal-dot.r{background:#ff5f5f}
+.terminal-dot.y{background:#ffd700}
+.terminal-dot.g{background:#00ff87}
+.terminal-title{
+  flex:1;text-align:center;font-family:var(--font-mono);
+  font-size:.75rem;color:var(--text-dim);
+}
+.terminal-body{
+  padding:1.25rem;font-family:var(--font-mono);font-size:.75rem;
+  line-height:1.7;overflow-x:auto;min-height:420px;
+  color:var(--green);
+}
+.terminal-body .t-cyan{color:var(--cyan)}
+.terminal-body .t-green{color:var(--green)}
+.terminal-body .t-pink{color:var(--pink)}
+.terminal-body .t-red{color:var(--red)}
+.terminal-body .t-yellow{color:var(--yellow)}
+.terminal-body .t-dim{color:var(--text-dim)}
+.terminal-body .t-white{color:#fff}
+.terminal-body .t-orange{color:var(--orange)}
+.terminal-body .t-bold{font-weight:700}
+
+.term-line{white-space:pre;opacity:0;animation:termFadeIn .3s forwards}
+@keyframes termFadeIn{to{opacity:1}}
+
+/* Blinking cursor */
+.cursor{display:inline-block;width:8px;height:14px;background:var(--green);animation:blink 1s step-end infinite;vertical-align:middle}
+@keyframes blink{50%{opacity:0}}
+
+/* Metrics counter animation */
+.metric-val{display:inline-block}
+
+/* ═══════════════════════════════════════════════════════ */
+/* ── FEATURES ────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════ */
+.features-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+  gap:1.5rem;margin-top:2.5rem;
+}
+.feature-card{
+  background:rgba(0,245,255,.03);border:1px solid rgba(0,245,255,.1);
+  border-radius:12px;padding:1.75rem;position:relative;overflow:hidden;
+  transition:all .4s;
+}
+.feature-card::before{
+  content:'';position:absolute;inset:0;
+  background:radial-gradient(circle at 50% 0%,rgba(0,245,255,.08),transparent 70%);
+  opacity:0;transition:opacity .4s;
+}
+.feature-card:hover{
+  border-color:rgba(0,245,255,.4);
+  box-shadow:0 0 20px rgba(0,245,255,.15),inset 0 0 20px rgba(0,245,255,.05);
+  transform:translateY(-4px);
+}
+.feature-card:hover::before{opacity:1}
+.feature-icon{font-size:2rem;margin-bottom:1rem;display:block}
+.feature-card h3{
+  font-family:var(--font-display);font-size:1rem;font-weight:700;
+  color:var(--cyan);margin-bottom:.5rem;
+}
+.feature-card p{font-size:.9rem;color:var(--text-dim);line-height:1.6;position:relative}
+
+/* ═══════════════════════════════════════════════════════ */
+/* ── MODES ───────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════ */
+#modes{background:var(--bg2)}
+.modes-list{margin-top:2.5rem;display:flex;flex-direction:column;gap:1rem}
+.mode-item{
+  display:flex;align-items:center;gap:1.5rem;
+  background:rgba(0,245,255,.03);border:1px solid rgba(0,245,255,.08);
+  border-radius:10px;padding:1.25rem 1.5rem;
+  transition:all .3s;
+}
+.mode-item:hover{
+  border-color:rgba(0,245,255,.25);
+  box-shadow:0 0 15px rgba(0,245,255,.1);
+}
+.mode-cmd{
+  font-family:var(--font-mono);font-size:.85rem;color:var(--green);
+  white-space:nowrap;min-width:280px;flex-shrink:0;
+  background:rgba(0,0,0,.3);padding:.5rem 1rem;border-radius:6px;
+  border:1px solid rgba(0,255,135,.15);
+}
+.mode-cmd .prompt{color:var(--text-dim)}
+.mode-label{
+  font-family:var(--font-display);font-size:.85rem;font-weight:700;
+  color:var(--cyan);min-width:100px;
+}
+.mode-desc{font-size:.9rem;color:var(--text-dim)}
+@media(max-width:768px){
+  .mode-item{flex-direction:column;align-items:flex-start;gap:.75rem}
+  .mode-cmd{min-width:unset;width:100%;overflow-x:auto}
+}
+
+/* ═══════════════════════════════════════════════════════ */
+/* ── ARCHITECTURE ────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════ */
+.arch-flow{
+  display:flex;align-items:center;justify-content:center;
+  gap:0;margin-top:3rem;flex-wrap:wrap;
+}
+.arch-box{
+  background:rgba(0,245,255,.05);border:2px solid rgba(0,245,255,.25);
+  border-radius:12px;padding:1.25rem 1.5rem;text-align:center;
+  position:relative;min-width:180px;
+  transition:all .4s;
+}
+.arch-box:hover{
+  border-color:var(--cyan);
+  box-shadow:0 0 25px rgba(0,245,255,.2);
+}
+.arch-box h4{font-family:var(--font-display);font-size:.8rem;color:var(--cyan);margin-bottom:.3rem}
+.arch-box p{font-family:var(--font-mono);font-size:.7rem;color:var(--text-dim)}
+.arch-arrow{
+  font-size:1.5rem;color:var(--cyan);padding:0 .5rem;
+  animation:arrowPulse 2s ease-in-out infinite;
+  flex-shrink:0;
+}
+@keyframes arrowPulse{
+  0%,100%{opacity:.3;transform:translateX(0)}
+  50%{opacity:1;transform:translateX(4px)}
+}
+@media(max-width:768px){
+  .arch-flow{flex-direction:column}
+  .arch-arrow{transform:rotate(90deg) !important;padding:.5rem 0}
+  @keyframes arrowPulse{
+    0%,100%{opacity:.3;transform:rotate(90deg) translateX(0)}
+    50%{opacity:1;transform:rotate(90deg) translateX(4px)}
+  }
+}
+
+/* ═══════════════════════════════════════════════════════ */
+/* ── QUICK START ─────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════ */
+#quickstart{background:var(--bg2)}
+.install-terminal{
+  background:#0c0c1e;border:1px solid rgba(0,245,255,.2);
+  border-radius:12px;overflow:hidden;max-width:700px;
+  margin:2rem auto 0;
+  box-shadow:0 0 30px rgba(0,245,255,.08);
+}
+.install-terminal .terminal-body{min-height:auto;padding:1.5rem}
+.install-line{margin-bottom:.25rem;white-space:pre}
+.install-line .prompt{color:var(--text-dim)}
+.install-line .cmd{color:var(--green)}
+.install-line .comment{color:var(--text-dim);font-style:italic}
+
+/* ═══════════════════════════════════════════════════════ */
+/* ── FOOTER ──────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════ */
+footer{
+  text-align:center;padding:3rem 1.5rem;
+  border-top:1px solid rgba(0,245,255,.1);
+}
+footer p{color:var(--text-dim);font-size:.9rem}
+footer a{color:var(--cyan)}
+.footer-heart{color:var(--red);display:inline-block;animation:heartbeatAnim 1.5s ease-in-out infinite}
+
+/* ── Back to Top ─────────────────────────────────────── */
+.back-top{
+  position:fixed;bottom:2rem;right:2rem;z-index:999;
+  width:44px;height:44px;border-radius:50%;border:2px solid rgba(0,245,255,.3);
+  background:rgba(5,5,16,.9);color:var(--cyan);font-size:1.2rem;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  opacity:0;transform:translateY(20px);transition:all .3s;
+  backdrop-filter:blur(10px);
+}
+.back-top.visible{opacity:1;transform:translateY(0)}
+.back-top:hover{
+  border-color:var(--cyan);box-shadow:0 0 15px rgba(0,245,255,.3);
+  background:rgba(0,245,255,.1);
+}
+
+/* ── Pulse Keyframe ──────────────────────────────────── */
+@keyframes pulse{
+  0%,100%{opacity:1;box-shadow:0 0 8px currentColor}
+  50%{opacity:.6;box-shadow:0 0 20px currentColor}
+}
+
+/* ── Neon separator ──────────────────────────────────── */
+.neon-sep{
+  height:1px;border:none;margin:3rem auto;max-width:300px;
+  background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+  opacity:.4;
+}
+</style>
+</head>
+<body>
+
+<!-- Grid Background -->
+<div class="grid-bg" aria-hidden="true"></div>
+
+<!-- Floating Particles -->
+<div class="particles" id="particles" aria-hidden="true"></div>
+
+<!-- ═══ Navigation ═══════════════════════════════════ -->
+<nav id="navbar">
+  <div class="nav-inner">
+    <a href="#hero" class="nav-logo"><span class="pulse-dot"></span> AGENT PULSE</a>
+    <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">☰</button>
+    <ul class="nav-links" id="navLinks">
+      <li><a href="#demo">Demo</a></li>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#modes">Modes</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#quickstart">Quick Start</a></li>
+      <li><a href="https://github.com/DUBSOpenHub/copilot-cli-agent-pulse" class="btn btn-outline" style="padding:.4rem 1rem;font-size:.75rem">★ GitHub</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ═══ HERO ═════════════════════════════════════════ -->
+<section id="hero">
+  <div class="hero-content">
+    <div class="hero-badge">⚡ v1.0 — Real-Time Agent Intelligence</div>
+    <h1 class="hero-title">AGENT<br>PULSE</h1>
+    <p class="hero-sub">Real-time agent tracking dashboard for <strong>GitHub Copilot CLI</strong></p>
+    <div class="pulse-wave" id="pulseWave" aria-label="Animated pulse wave"></div>
+    <div class="heartbeat" aria-label="Heartbeat animation">💗 💖 💗 💓 ❤️ 💓 💗 💖</div>
+    <div class="cta-group">
+      <a href="#quickstart" class="btn btn-primary">🚀 Quick Start</a>
+      <a href="https://github.com/DUBSOpenHub/copilot-cli-agent-pulse" class="btn btn-outline">⬡ View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ TERMINAL DEMO ═══════════════════════════════ -->
+<section id="demo">
+  <div class="container">
+    <div class="reveal">
+      <span class="section-tag">Live Preview</span>
+      <h2 class="section-title glow-cyan">Dashboard in Action</h2>
+      <p style="color:var(--text-dim);max-width:600px">Watch Agent Pulse track your Copilot CLI sessions in real time — sparklines, heatmaps, velocity metrics, and more.</p>
+    </div>
+    <div class="terminal reveal reveal-delay-2">
+      <div class="terminal-bar">
+        <span class="terminal-dot r"></span>
+        <span class="terminal-dot y"></span>
+        <span class="terminal-dot g"></span>
+        <span class="terminal-title">agent_pulse.py — live dashboard</span>
+      </div>
+      <div class="terminal-body" id="terminalBody"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ FEATURES ════════════════════════════════════ -->
+<section id="features">
+  <div class="container">
+    <div class="reveal">
+      <span class="section-tag">Capabilities</span>
+      <h2 class="section-title glow-green">Powerful Features</h2>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card reveal reveal-delay-1">
+        <span class="feature-icon">🖥️</span>
+        <h3>Live Session Tracking</h3>
+        <p>Real-time monitoring of active Copilot CLI sessions with instant updates and process-level scanning.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-2">
+        <span class="feature-icon">🤖</span>
+        <h3>Agent Monitoring</h3>
+        <p>Track all agent types: task, explore, general-purpose, rubber-duck, code-review, and 10+ custom agents.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-3">
+        <span class="feature-icon">📊</span>
+        <h3>Trend Analysis</h3>
+        <p>14-day sparklines, daily breakdowns, trend arrows, and historical comparisons at a glance.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-4">
+        <span class="feature-icon">🔥</span>
+        <h3>24h Activity Heatmap</h3>
+        <p>Hourly session density visualization shows when you're most productive with AI agents.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-5">
+        <span class="feature-icon">🚀</span>
+        <h3>Agent Velocity</h3>
+        <p>Agents-per-hour velocity metric with peak tracking and acceleration indicators.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-1">
+        <span class="feature-icon">📱</span>
+        <h3>Responsive Layout</h3>
+        <p>3-tier adaptive UI: full → compact → micro dashboard. Works in any terminal size.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ MODES ═══════════════════════════════════════ -->
+<section id="modes">
+  <div class="container">
+    <div class="reveal">
+      <span class="section-tag">Operating Modes</span>
+      <h2 class="section-title glow-pink">Five Ways to Run</h2>
+    </div>
+    <div class="modes-list">
+      <div class="mode-item reveal reveal-delay-1">
+        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py</div>
+        <span class="mode-label">Snapshot</span>
+        <span class="mode-desc">Instant point-in-time view of all active sessions and agents</span>
+      </div>
+      <div class="mode-item reveal reveal-delay-2">
+        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py --live</div>
+        <span class="mode-label">Live</span>
+        <span class="mode-desc">Real-time auto-refreshing dashboard with sparklines and heatmaps</span>
+      </div>
+      <div class="mode-item reveal reveal-delay-3">
+        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py --history</div>
+        <span class="mode-label">History</span>
+        <span class="mode-desc">14-day historical stats, daily breakdowns, and trend analysis</span>
+      </div>
+      <div class="mode-item reveal reveal-delay-4">
+        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py --export</div>
+        <span class="mode-label">Export</span>
+        <span class="mode-desc">Machine-readable JSON output for integration with other tools</span>
+      </div>
+      <div class="mode-item reveal reveal-delay-5">
+        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py --compact</div>
+        <span class="mode-label">Compact</span>
+        <span class="mode-desc">Minimal single-line display for narrow terminals and status bars</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ ARCHITECTURE ════════════════════════════════ -->
+<section id="architecture">
+  <div class="container">
+    <div class="reveal">
+      <span class="section-tag">Under the Hood</span>
+      <h2 class="section-title glow-cyan">Architecture</h2>
+      <p style="color:var(--text-dim);max-width:550px">A clean four-stage pipeline from process discovery to beautiful terminal output.</p>
+    </div>
+    <div class="arch-flow reveal reveal-delay-2">
+      <div class="arch-box">
+        <h4>🔍 Process Scanner</h4>
+        <p>Discovers CLI sessions</p>
+      </div>
+      <span class="arch-arrow">→</span>
+      <div class="arch-box">
+        <h4>🗄️ Session Store</h4>
+        <p>DuckDB cloud queries</p>
+      </div>
+      <span class="arch-arrow">→</span>
+      <div class="arch-box">
+        <h4>🎨 Dashboard Renderer</h4>
+        <p>Layout &amp; sparklines</p>
+      </div>
+      <span class="arch-arrow">→</span>
+      <div class="arch-box">
+        <h4>🖥️ Terminal Output</h4>
+        <p>Rich TUI display</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ QUICK START ═════════════════════════════════ -->
+<section id="quickstart">
+  <div class="container">
+    <div class="reveal">
+      <span class="section-tag">Get Started</span>
+      <h2 class="section-title glow-green">Up and Running in 30 Seconds</h2>
+    </div>
+    <div class="install-terminal reveal reveal-delay-2">
+      <div class="terminal-bar">
+        <span class="terminal-dot r"></span>
+        <span class="terminal-dot y"></span>
+        <span class="terminal-dot g"></span>
+        <span class="terminal-title">installation</span>
+      </div>
+      <div class="terminal-body">
+        <div class="install-line"><span class="comment"># Clone the repository</span></div>
+        <div class="install-line"><span class="prompt">$ </span><span class="cmd">git clone https://github.com/DUBSOpenHub/copilot-cli-agent-pulse.git</span></div>
+        <div class="install-line">&nbsp;</div>
+        <div class="install-line"><span class="comment"># Enter the directory</span></div>
+        <div class="install-line"><span class="prompt">$ </span><span class="cmd">cd copilot-cli-agent-pulse</span></div>
+        <div class="install-line">&nbsp;</div>
+        <div class="install-line"><span class="comment"># Install dependencies</span></div>
+        <div class="install-line"><span class="prompt">$ </span><span class="cmd">pip install -r requirements.txt</span></div>
+        <div class="install-line">&nbsp;</div>
+        <div class="install-line"><span class="comment"># Launch the live dashboard</span></div>
+        <div class="install-line"><span class="prompt">$ </span><span class="cmd">python agent_pulse.py --live</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="neon-sep">
+
+<!-- ═══ FOOTER ══════════════════════════════════════ -->
+<footer>
+  <p>Built with <span class="footer-heart">❤️</span> for the <a href="https://github.com/DUBSOpenHub/copilot-cli-agent-pulse">GitHub Copilot CLI</a> community</p>
+  <p style="margin-top:.5rem;font-size:.75rem;color:var(--text-dim)">© 2025 Agent Pulse · DUBSOpenHub</p>
+</footer>
+
+<!-- Back to Top -->
+<button class="back-top" id="backTop" aria-label="Back to top">↑</button>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!-- ── JavaScript ─────────────────────────────────── -->
+<!-- ═══════════════════════════════════════════════════ -->
+<script>
+(function(){
+  'use strict';
+
+  /* ── Particles ─────────────────────────────────── */
+  const particlesEl = document.getElementById('particles');
+  const colors = ['#00f5ff','#00ff87','#ff00ff','#ff5f5f','#ffd700'];
+  for(let i=0;i<40;i++){
+    const p=document.createElement('div');
+    p.className='particle';
+    const size=Math.random()*4+1;
+    const c=colors[Math.floor(Math.random()*colors.length)];
+    Object.assign(p.style,{
+      width:size+'px',height:size+'px',
+      left:Math.random()*100+'%',
+      background:c,
+      boxShadow:'0 0 '+size*3+'px '+c,
+      animationDuration:(Math.random()*15+10)+'s',
+      animationDelay:(Math.random()*15)+'s',
+    });
+    particlesEl.appendChild(p);
+  }
+
+  /* ── Pulse Wave ────────────────────────────────── */
+  const waveChars='▁▂▃▄▅▆▇█▇▆▅▄▃▂▁';
+  const pulseWave=document.getElementById('pulseWave');
+  let waveOffset=0;
+  function renderWave(){
+    let html='';
+    for(let i=0;i<30;i++){
+      const idx=(i+waveOffset)%waveChars.length;
+      const delay=(i*0.08).toFixed(2);
+      html+=`<span style="animation-delay:${delay}s">${waveChars[idx]}</span>`;
+    }
+    pulseWave.innerHTML=html;
+    waveOffset++;
+  }
+  renderWave();
+  setInterval(renderWave,600);
+
+  /* ── Mobile Nav Toggle ─────────────────────────── */
+  const navToggle=document.getElementById('navToggle');
+  const navLinks=document.getElementById('navLinks');
+  navToggle.addEventListener('click',()=>{
+    navLinks.classList.toggle('open');
+    navToggle.textContent=navLinks.classList.contains('open')?'✕':'☰';
+  });
+  navLinks.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>{
+    navLinks.classList.remove('open');
+    navToggle.textContent='☰';
+  }));
+
+  /* ── Scroll: nav highlight, reveal, back-top ─── */
+  const sections=document.querySelectorAll('section[id]');
+  const navAnchors=navLinks.querySelectorAll('a[href^="#"]');
+  const backTop=document.getElementById('backTop');
+  const navbar=document.getElementById('navbar');
+  const reveals=document.querySelectorAll('.reveal');
+
+  function onScroll(){
+    const sy=window.scrollY;
+    // Nav scrolled state
+    navbar.classList.toggle('scrolled',sy>50);
+    // Back-to-top
+    backTop.classList.toggle('visible',sy>400);
+    // Active section
+    let current='';
+    sections.forEach(s=>{
+      if(sy>=s.offsetTop-200) current=s.id;
+    });
+    navAnchors.forEach(a=>{
+      a.classList.toggle('active',a.getAttribute('href')==='#'+current);
+    });
+    // Reveal
+    reveals.forEach(el=>{
+      if(el.getBoundingClientRect().top<window.innerHeight-80){
+        el.classList.add('visible');
+      }
+    });
+  }
+  window.addEventListener('scroll',onScroll,{passive:true});
+  onScroll();
+
+  backTop.addEventListener('click',()=>window.scrollTo({top:0,behavior:'smooth'}));
+
+  /* ── Terminal Demo Animation ───────────────────── */
+  const termBody=document.getElementById('terminalBody');
+  const agentTypes=['explore','task','general-purpose','code-review','rubber-duck'];
+  const agentIcons=['⚡','⚙','◉','🔍','🦆'];
+  const agentColors=['t-cyan','t-yellow','t-green','t-pink','t-orange'];
+  const sparkChars='▁▂▃▄▅▆▇█';
+  const heatChars=' ░▒▓█';
+
+  function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a}
+  function sparkline(len){
+    let s='';for(let i=0;i<len;i++) s+=sparkChars[rnd(0,7)];return s;
+  }
+  function heatmap(){
+    let s='';for(let i=0;i<24;i++) s+=heatChars[rnd(0,4)];return s;
+  }
+  function bar(val,max,width){
+    const filled=Math.round((val/max)*width);
+    let s='';
+    for(let i=0;i<width;i++){
+      if(i<filled){
+        if(i<width*0.6) s+='<span class="t-green">█</span>';
+        else if(i<width*0.85) s+='<span class="t-yellow">█</span>';
+        else s+='<span class="t-red">█</span>';
+      } else s+='<span class="t-dim">░</span>';
+    }
+    return s;
+  }
+
+  function renderDashboard(){
+    const sessions=rnd(2,8);
+    const agents=rnd(4,14);
+    const velocity=(Math.random()*3+0.5).toFixed(1);
+    const today=rnd(20,60);
+    const peak=rnd(6,12);
+
+    const agentCounts=agentTypes.map(()=>rnd(0,5));
+    const total=agentCounts.reduce((a,b)=>a+b,1);
+
+    const bannerLines=[
+      '  █████╗  ██████╗ ███████╗███╗   ██╗████████╗',
+      ' ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝',
+      ' ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ',
+      ' ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ',
+      ' ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ',
+      ' ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ',
+      '       ██████╗ ██╗   ██╗██╗     ███████╗███████╗',
+      '       ██╔══██╗██║   ██║██║     ██╔════╝██╔════╝',
+      '       ██████╔╝██║   ██║██║     ███████╗█████╗  ',
+      '       ██╔═══╝ ██║   ██║██║     ╚════██║██╔══╝  ',
+      '       ██║     ╚██████╔╝███████╗███████║███████╗',
+      '       ╚═╝      ╚═════╝ ╚══════╝╚══════╝╚══════╝',
+    ];
+
+    let html='';
+    bannerLines.forEach(l=>{
+      html+=`<div class="term-line"><span class="t-cyan t-bold">${l}</span></div>`;
+    });
+
+    html+=`<div class="term-line">&nbsp;</div>`;
+    html+=`<div class="term-line"><span class="t-dim">─────────────────────────────────────────────────────────</span></div>`;
+    html+=`<div class="term-line"><span class="t-cyan t-bold">  ◆ LIVE METRICS</span>  <span class="t-dim">refreshed every 5s</span></div>`;
+    html+=`<div class="term-line"><span class="t-dim">─────────────────────────────────────────────────────────</span></div>`;
+    html+=`<div class="term-line">&nbsp;</div>`;
+    html+=`<div class="term-line">  <span class="t-white t-bold">Active Sessions:</span>  <span class="t-green t-bold">${sessions}</span>    ${bar(sessions,10,20)}  </div>`;
+    html+=`<div class="term-line">  <span class="t-white t-bold">Running Agents :</span>  <span class="t-cyan t-bold">${String(agents).padStart(2)}</span>    ${bar(agents,20,20)}  </div>`;
+    html+=`<div class="term-line">  <span class="t-white t-bold">Velocity       :</span>  <span class="t-yellow t-bold">${velocity}</span><span class="t-dim">/hr</span>  <span class="t-dim">peak: ${peak}/hr</span></div>`;
+    html+=`<div class="term-line">  <span class="t-white t-bold">Today's Total  :</span>  <span class="t-pink t-bold">${today}</span>   <span class="t-dim">▲ trending up</span></div>`;
+    html+=`<div class="term-line">&nbsp;</div>`;
+
+    html+=`<div class="term-line"><span class="t-dim">─────────────────────────────────────────────────────────</span></div>`;
+    html+=`<div class="term-line"><span class="t-cyan t-bold">  ◆ AGENT BREAKDOWN</span></div>`;
+    html+=`<div class="term-line"><span class="t-dim">─────────────────────────────────────────────────────────</span></div>`;
+    agentTypes.forEach((t,i)=>{
+      const cnt=agentCounts[i];
+      const pct=Math.round(cnt/total*100);
+      html+=`<div class="term-line">  <span class="${agentColors[i]}">${agentIcons[i]} ${t.padEnd(18)}</span> <span class="t-white t-bold">${String(cnt).padStart(2)}</span> <span class="t-dim">(${String(pct).padStart(2)}%)</span>  ${bar(cnt,5,15)}</div>`;
+    });
+    html+=`<div class="term-line">&nbsp;</div>`;
+
+    html+=`<div class="term-line"><span class="t-dim">─────────────────────────────────────────────────────────</span></div>`;
+    html+=`<div class="term-line"><span class="t-cyan t-bold">  ◆ 14-DAY SPARKLINE</span>        <span class="t-cyan t-bold">◆ 24h HEATMAP</span></div>`;
+    html+=`<div class="term-line"><span class="t-dim">─────────────────────────────────────────────────────────</span></div>`;
+    html+=`<div class="term-line">  <span class="t-green">${sparkline(14)}</span>  <span class="t-dim">sessions</span>     <span class="t-orange">${heatmap()}</span></div>`;
+    html+=`<div class="term-line">  <span class="t-cyan">${sparkline(14)}</span>  <span class="t-dim">agents</span>       <span class="t-dim">0h            12h          23h</span></div>`;
+    html+=`<div class="term-line">&nbsp;</div>`;
+    html+=`<div class="term-line"><span class="t-dim">  Last refresh: just now</span>  <span class="cursor"></span></div>`;
+
+    termBody.innerHTML=html;
+
+    // Staggered fade-in
+    const lines=termBody.querySelectorAll('.term-line');
+    lines.forEach((l,i)=>{l.style.animationDelay=(i*0.04)+'s'});
+  }
+
+  // Initial + refresh
+  const demObs=new IntersectionObserver((entries)=>{
+    if(entries[0].isIntersecting){
+      renderDashboard();
+      setInterval(renderDashboard,5000);
+      demObs.disconnect();
+    }
+  },{threshold:0.2});
+  demObs.observe(document.getElementById('demo'));
+
+})();
+</script>
+</body>
+</html>

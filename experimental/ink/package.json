@@ -1,0 +1,32 @@
+{
+  "name": "agent-pulse",
+  "version": "1.0.0",
+  "description": "Real-time agent tracking dashboard for GitHub Copilot CLI",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "agent-pulse": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": ["copilot", "cli", "dashboard", "agents", "monitoring"],
+  "author": "DUBSOpenHub",
+  "license": "MIT",
+  "dependencies": {
+    "ink": "^4.4.1",
+    "ink-big-text": "^2.0.0",
+    "ink-gradient": "^3.0.0",
+    "ink-spinner": "^5.0.0",
+    "ink-table": "^3.1.0",
+    "react": "^18.2.0",
+    "chalk": "^5.3.0",
+    "figures": "^6.0.1",
+    "date-fns": "^3.0.0",
+    "asciichart": "^1.5.25",
+    "@babel/core": "^7.23.0",
+    "@babel/preset-react": "^7.23.0",
+    "@babel/register": "^7.23.0"
+  }
+}
