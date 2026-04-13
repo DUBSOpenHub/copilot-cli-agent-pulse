@@ -228,3 +228,7 @@ See [SECURITY.md](SECURITY.md) for our security policy.
 ## 📄 License
 
 [MIT](LICENSE) — built with ❤️ for the GitHub Copilot CLI community.
+
+---
+
+🐙 Created with 💜 by [@DUBSOpenHub](https://github.com/DUBSOpenHub) with the [GitHub Copilot CLI](https://docs.github.com/copilot).
