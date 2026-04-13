@@ -23,16 +23,7 @@
 ---
 
 <div align="center">
-
-```
-    ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
-   /   \ / __|| __| \| |_   _| | _ \| | | | |  / __| __|
-   | - || (_ || _|| .` | | |   |  _/| |_| | |__\__ \ _|
-   |_|_| \___||___|_|\_| |_|   |_|   \___/|____|___/___|
-
-            powered by GitHub Copilot CLI
-```
-
+<img src="assets/hero-banner.png" alt="Agent Pulse — for GitHub Copilot CLI" width="700">
 </div>
 
 <div align="center">
