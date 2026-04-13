@@ -198,6 +198,22 @@ section{position:relative;padding:6rem 1.5rem}
   font-size:1.5rem;margin-bottom:2rem;
   animation:heartbeatAnim 1.5s ease-in-out infinite;
 }
+/* Hero Powered-by Line */
+.hero-powered{
+  display:flex;align-items:center;justify-content:center;gap:.75rem;
+  margin:.75rem 0 1.25rem;
+}
+.hero-powered-text{
+  font-family:var(--font-display);font-size:clamp(1rem,2.5vw,1.4rem);
+  font-weight:700;color:var(--cyan);letter-spacing:2px;
+  text-shadow:0 0 15px rgba(0,245,255,.6),0 0 30px rgba(0,245,255,.3);
+  text-transform:uppercase;
+}
+.hero-heart{
+  font-size:1.6rem;
+  animation:heartbeatAnim 1.5s ease-in-out infinite;
+  filter:drop-shadow(0 0 8px rgba(255,0,255,.6));
+}
 @keyframes heartbeatAnim{
   0%,100%{transform:scale(1)}
   15%{transform:scale(1.15)}
@@ -593,9 +609,13 @@ footer a{color:var(--cyan)}
   <div class="hero-content">
     <div class="hero-badge" id="heroBadge">⚡ for GitHub Copilot CLI</div>
     <h1 class="hero-title">AGENT<br>PULSE</h1>
+    <div class="hero-powered" id="heroPowered">
+      <span class="hero-heart" id="heroHeart">💗</span>
+      <span class="hero-powered-text">for GitHub Copilot CLI</span>
+      <span class="hero-heart" id="heroHeart2">💖</span>
+    </div>
     <p class="hero-sub hero-sub-typed" id="heroSubTyped"><span id="typedText"></span><span class="typed-cursor"></span></p>
     <div class="pulse-wave" id="pulseWave" aria-label="Animated pulse wave"></div>
-    <div class="heartbeat" aria-label="Heartbeat animation">💗 💖 💗 💓 ❤️ 💓 💗 💖</div>
     <div class="cta-group">
       <a href="#quickstart" class="btn btn-primary">🚀 Quick Start</a>
       <a href="https://github.com/DUBSOpenHub/copilot-cli-agent-pulse" class="btn btn-outline">⬡ View on GitHub</a>
@@ -988,8 +1008,12 @@ footer a{color:var(--cyan)}
     if(heartTimer) return;
     heartTimer=setInterval(function(){
       heartIdx=(heartIdx+1)%heartbeats.length;
-      const el=document.getElementById('heartEl');
+      var el=document.getElementById('heartEl');
       if(el) el.textContent=heartbeats[heartIdx];
+      var h1=document.getElementById('heroHeart');
+      var h2=document.getElementById('heroHeart2');
+      if(h1) h1.textContent=heartbeats[heartIdx];
+      if(h2) h2.textContent=heartbeats[(heartIdx+2)%heartbeats.length];
     },400);
   }
   function startUptime(){
