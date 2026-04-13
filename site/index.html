@@ -1012,7 +1012,7 @@ footer a{color:var(--cyan)}
       var h1=document.getElementById('heroHeart');
       var h2=document.getElementById('heroHeart2');
       if(h1) h1.textContent=heartbeats[heartIdx];
-      if(h2) h2.textContent=heartbeats[(heartIdx+2)%heartbeats.length];
+      if(h2) h2.textContent=heartbeats[heartIdx];
     },400);
   }
   function startUptime(){
