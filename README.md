@@ -13,6 +13,13 @@
 
 </div>
 
+> ### ⚡ One Command. That's It.
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/DUBSOpenHub/copilot-cli-agent-pulse/main/quickstart.sh | bash
+> ```
+> Then run: `python3 ~/copilot-cli-agent-pulse/agent_pulse.py --live`
+
 ---
 
 <div align="center">
