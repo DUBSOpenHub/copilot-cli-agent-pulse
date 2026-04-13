@@ -231,4 +231,4 @@ See [SECURITY.md](SECURITY.md) for our security policy.
 
 ---
 
-🐙 Created with 💜 by [@DUBSOpenHub](https://github.com/DUBSOpenHub) with the [GitHub Copilot CLI](https://docs.github.com/copilot).
+Built with ❤️ for the GitHub Copilot CLI community by [@DUBSOpenHub](https://github.com/DUBSOpenHub).
