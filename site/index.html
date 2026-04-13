@@ -1033,7 +1033,7 @@ footer a{color:var(--cyan)}
     html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Active Sessions:</span>  <span class="t-green t-bold" id="numSess">'+lastVals.sessions+'</span>    '+bar(sessions,10,20)+'  <span class="t-dim">║</span></div>';
     html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Running Agents :</span>  <span class="t-cyan t-bold" id="numAgts">'+String(lastVals.agents).padStart(2)+'</span>    '+bar(agents,20,20)+'  <span class="t-dim">║</span></div>';
     html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Velocity       :</span>  <span class="t-yellow t-bold" id="numVel">'+lastVals.velocity.toFixed(1)+'</span><span class="t-dim">/hr</span>  <span class="t-dim">peak: '+peak+'/hr</span>  <span class="t-dim">║</span></div>';
-    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Today's Total  :</span>  <span class="t-pink t-bold" id="numTod">'+lastVals.today+'</span>   <span class="t-dim">▲ trending up</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Today\u2019s Total  :</span>  <span class="t-pink t-bold" id="numTod">'+lastVals.today+'</span>   <span class="t-dim">▲ trending up</span>  <span class="t-dim">║</span></div>';
     html+='<div class="term-line">'+panelBot()+'</div>';
     html+='<div class="term-line">&nbsp;</div>';
 
