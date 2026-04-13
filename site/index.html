@@ -164,22 +164,7 @@ section{position:relative;padding:6rem 1.5rem}
   font-family:var(--font-display);font-weight:900;
   font-size:clamp(2.5rem,8vw,6rem);line-height:1.1;
   color:#fff;margin-bottom:1rem;
-}
-.hero-agent{
-  text-shadow:0 0 20px rgba(0,245,255,.4),0 0 60px rgba(0,245,255,.15);
-}
-.hero-pulse{
-  display:inline-block;
-  background:linear-gradient(90deg,var(--cyan),var(--pink),var(--cyan));
-  background-size:200% 100%;
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-  background-clip:text;
-  animation:pulseShift 4s linear infinite;
-  filter:drop-shadow(0 0 20px rgba(0,245,255,.5)) drop-shadow(0 0 40px rgba(255,0,255,.3));
-}
-@keyframes pulseShift{
-  0%{background-position:0% 50%}
-  100%{background-position:200% 50%}
+  text-shadow:0 0 20px rgba(0,245,255,.5),0 0 60px rgba(0,245,255,.2),0 0 100px rgba(0,245,255,.1);
 }
 .hero-sub{
   font-size:clamp(1rem,2.5vw,1.35rem);color:var(--text-dim);
@@ -617,7 +602,7 @@ footer a{color:var(--cyan)}
 <section id="hero">
   <div class="hero-content">
     <div class="hero-badge" id="heroBadge">⚡ for GitHub Copilot CLI</div>
-    <h1 class="hero-title"><span class="hero-agent">AGENT</span><br><span class="hero-pulse">PULSE</span></h1>
+    <h1 class="hero-title">AGENT<br>PULSE</h1>
     <div class="hero-powered" id="heroPowered">
       <span class="hero-heart" id="heroHeart">💗</span>
       <span class="hero-powered-text">for GitHub Copilot CLI</span>
