@@ -35,6 +35,11 @@
 
 </div>
 
+<div align="center">
+<img src="assets/dashboard-demo.png" alt="Agent Pulse Dashboard Demo" width="700">
+<br><em>Live dashboard tracking sessions, agents, velocity, and more — <a href="https://dubsopenhub.github.io/copilot-cli-agent-pulse/">see it live</a></em>
+</div>
+
 ---
 
 ## 🌟 Overview
