@@ -16,10 +16,10 @@ Screen {
   margin: 1 2 0 2;
 }
 
-#top_grid {
+#row1_grid, #row2_grid, #row3_grid, #row4_grid {
   grid-size: 2;
   grid-columns: 1fr 1fr;
-  grid-rows: auto auto;
+  grid-rows: auto;
   grid-gutter: 1;
   margin: 0 2;
 }
@@ -27,22 +27,6 @@ Screen {
 #stats, #history, #mix, #signal, #health, #model_dist, #sessions, #installed {
   height: auto;
   min-width: 40;
-}
-
-#mid_grid {
-  grid-size: 2;
-  grid-columns: 1fr 1fr;
-  grid-rows: auto;
-  grid-gutter: 1;
-  margin: 0 2;
-}
-
-#bot_grid {
-  grid-size: 2;
-  grid-columns: 1fr 1fr;
-  grid-rows: auto;
-  grid-gutter: 1;
-  margin: 0 2;
 }
 
 #recent_box {
@@ -61,6 +45,7 @@ Screen {
 #recent {
   height: auto;
   min-height: 8;
+  max-height: 20;
 }
 
 DataTable {

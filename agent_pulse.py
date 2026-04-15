@@ -1483,19 +1483,22 @@ class AgentPulseApp(App):
             Grid(
                 HealthGauge(id="health"),
                 StatPanel(id="stats"),
+                id="row1_grid",
+            ),
+            Grid(
                 HistoryPanel(self.store, id="history"),
                 SignalPanel(self.store, id="signal"),
-                id="top_grid",
+                id="row2_grid",
             ),
             Grid(
                 MixPanel(id="mix"),
                 ModelDistPanel(id="model_dist"),
-                id="mid_grid",
+                id="row3_grid",
             ),
             Grid(
                 ActiveSessionsPanel(id="sessions"),
                 InstalledAgentsPanel(id="installed"),
-                id="bot_grid",
+                id="row4_grid",
             ),
             Vertical(
                 GlowTitle("RECENT LAUNCHES", id="recent_title"),
