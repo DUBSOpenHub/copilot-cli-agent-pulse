@@ -1,105 +1,1621 @@
 #!/usr/bin/env python3
-"""
-╔══════════════════════════════════════════════════════════╗
-║  Agent Pulse — Real-time GitHub Copilot CLI Dashboard   ║
-║  Cyberpunk · Responsive · Resilient · Info-dense        ║
-╚══════════════════════════════════════════════════════════╝
+"""Agent Pulse — real-time agent tracking dashboard for GitHub Copilot CLI (macOS).
 
-Modes:
-  python agent_pulse.py              → one-shot snapshot
-  python agent_pulse.py --live       → persistent live dashboard
-  python agent_pulse.py --history    → historical stats only
-  python agent_pulse.py --export     → export JSON to stdout
-  python agent_pulse.py --compact    → force compact mode
+Install:
+  pip install textual
+
+Run (persistently, keep open):
+  python3 agent_pulse.py
+
+Data (SQLite):
+  ~/.copilot/agent-pulse/agent-pulse.db
+
+Telemetry signals (best-effort):
+  1) `ps` inspection estimates active Copilot CLI *terminal sessions* (distinct TTYs).
+  2) Incremental tail of ~/.copilot/logs/*.log detects agent launches by parsing
+     `agent_type` markers and tool task payloads.
+
+This dashboard is intentionally "mission control" styled (neon + motion) so it feels
+alive while you work.
 """
 
-import argparse
-import datetime
+from __future__ import annotations
+
 import json
-import math
 import os
 import re
-import signal
 import sqlite3
 import subprocess
-import sys
 import time
-from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
 
-# ─── Graceful Rich import (from C) ───────────────────────────────────────────
-try:
-    from rich import box
-    from rich.align import Align
-    from rich.columns import Columns
-    from rich.console import Console, Group
-    from rich.layout import Layout
-    from rich.live import Live
-    from rich.panel import Panel
-    from rich.rule import Rule
-    from rich.spinner import Spinner
-    from rich.table import Table
-    from rich.text import Text
-except ImportError:
-    print("╭─────────────────────────────────────────────────────╮")
-    print("│  ⚠️  Missing required package: rich                 │")
-    print("│                                                     │")
-    print("│  Install with:                                      │")
-    print("│    pip install rich                                 │")
-    print("│                                                     │")
-    print("│  Or use the requirements file:                      │")
-    print("│    pip install -r requirements.txt                  │")
-    print("╰─────────────────────────────────────────────────────╯")
-    sys.exit(1)
+from rich.align import Align
+from rich.console import Group
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
-# ─── Paths ────────────────────────────────────────────────────────────────────
-COPILOT_DIR      = Path.home() / ".copilot"
-SESSION_DB       = COPILOT_DIR / "session-store.db"
-SESSION_STATE    = COPILOT_DIR / "session-state"
-AGENTS_DIR       = COPILOT_DIR / "agents"
-HISTORY_DIR      = Path.home() / ".copilot" / "agent-pulse"
-HISTORY_FILE     = HISTORY_DIR / "history.json"
-HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+from textual.app import App, ComposeResult
+from textual.containers import Grid, Horizontal, Vertical
+from textual.reactive import reactive
+from textual.widgets import DataTable, Footer, Static
 
-# ─── Cyberpunk Neon Palette (from D) ─────────────────────────────────────────
-C_NEON_GREEN = "#00ff87"
-C_NEON_PINK  = "#ff00ff"
-C_NEON_CYAN  = "#00f5ff"
-C_NEON_RED   = "#ff5f5f"
-C_BG_DARK    = "#050510"
 
-C_ACCENT    = C_NEON_CYAN
-C_GOOD      = C_NEON_GREEN
-C_WARN      = "#ffd75f"
-C_HOT       = C_NEON_RED
-C_MUTED     = "#6c6f93"
-C_HEADER    = f"bold {C_NEON_CYAN}"
-C_LABEL     = "bold white"
-C_DIM       = "dim #a0a0c0"
+# ----------------------------
+# Visuals / Theme
+# ----------------------------
 
-# Agent-type badge colours
-AGENT_COLORS = {
-    "general-purpose":      (f"bold {C_NEON_GREEN}",   "◉"),
-    "explore":              (f"bold {C_NEON_CYAN}",    "⚡"),
-    "task":                 ("bold #ffd75f",            "⚙"),
-    "code-review":          (f"bold {C_NEON_PINK}",    "🔍"),
-    "havoc-hackathon":      (f"bold {C_NEON_RED}",     "🏟"),
-    "hive1k":               ("bold #ffd75f",            "🐝"),
-    "swarm-command":        (f"bold {C_NEON_CYAN}",    "🌊"),
-    "stampede-agent":       ("bold #ff8700",            "🐎"),
-    "dark-factory":         ("bold #8a8a8a",            "🏭"),
-    "dispatch-worker":      ("bold #5f87d7",            "📦"),
-    "ai-edge":              ("bold #5f87ff",            "🔮"),
-    "security-audit":       (f"bold {C_NEON_RED}",     "🛡"),
-    "full-sweep":           ("bold white",              "🔭"),
-    "octoscanner":          ("bold #00af5f",            "🐙"),
-    "repo-detective":       ("bold #d7af5f",            "🔎"),
-    "compliance-inspector": ("bold #ffd700",            "⚖"),
+ASCII_LOGO = r"""
+    _                    _     ____        _
+   / \   __ _  ___ _ __ | |_  |  _ \ _   _| |___  ___
+  / _ \ / _` |/ _ \ '_ \| __| | |_) | | | | / __|/ _ \
+ / ___ \ (_| |  __/ | | | |_  |  __/| |_| | \__ \  __/
+/_/   \_\__, |\___|_| |_|\__| |_|    \__,_|_|___/\___|
+        |___/
+""".rstrip("\n")
+
+AGENT_TYPES = (
+    "task",
+    "explore",
+    "general-purpose",
+    "code-review",
+    "rubber-duck",
+    "dispatch-worker",
+    "stampede-agent",
+    "swarm-command",
+)
+
+TYPE_COLOR: Dict[str, str] = {
+    "task": "#00D1FF",
+    "explore": "#7CFF6B",
+    "general-purpose": "#B388FF",
+    "code-review": "#FF4D6D",
+    "rubber-duck": "#FFD166",
+    "dispatch-worker": "#00F5D4",
+    "stampede-agent": "#FF9F1C",
+    "swarm-command": "#80FFDB",
+    "custom": "#C7F9CC",
+    "unknown": "#8D99AE",
 }
-DEFAULT_AGENT_COLOR = ("bold white", "●")
 
-# ─── ASCII Art Banner ─────────────────────────────────────────────────────────
+_SPARK_CHARS = "▁▂▃▄▅▆▇█"
+_WAVE_CHARS = "▁▂▃▄▅▆▇█▇▆▅▄▃▂▁"
+_HEARTBEATS = ["💗", "💖", "💓", "❤️", "💓", "💗"]
+
+
+def now_ts() -> int:
+    return int(time.time())
+
+
+def clamp(n: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, n))
+
+
+def human_age(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h"
+
+
+def sparkline(values: Sequence[float], *, width: int = 40) -> str:
+    if not values:
+        return " " * width
+
+    if len(values) > width:
+        step = len(values) / width
+        sampled = []
+        for i in range(width):
+            start = int(i * step)
+            end = max(start + 1, int((i + 1) * step))
+            chunk = values[start:end]
+            sampled.append(sum(chunk) / len(chunk))
+        values = sampled
+    else:
+        values = list(values) + [values[-1]] * (width - len(values))
+
+    vmin = min(values)
+    vmax = max(values)
+    if vmax - vmin < 1e-9:
+        return _SPARK_CHARS[0] * width
+
+    out = []
+    for v in values:
+        x = (v - vmin) / (vmax - vmin)
+        idx = int(clamp(round(x * (len(_SPARK_CHARS) - 1)), 0, len(_SPARK_CHARS) - 1))
+        out.append(_SPARK_CHARS[idx])
+    return "".join(out)
+
+
+def pulse_wave(offset: int, width: int = 40) -> Text:
+    """Generate a colored animated wave bar."""
+    wave_colors = ["#1a1a2e", "#00D1FF", "#7CFF6B", "#FFD166", "#FF4D6D", "#B388FF", "#00F5D4", "#FF4D6D", "#FFD166", "#7CFF6B", "#00D1FF", "#1a1a2e"]
+    result = Text()
+    for i in range(width):
+        char_idx = (i + offset) % len(_WAVE_CHARS)
+        color_idx = (i + offset) % len(wave_colors)
+        result.append(_WAVE_CHARS[char_idx], style=f"bold {wave_colors[color_idx]}")
+    return result
+
+
+def gradient_text(text: str, colors: Sequence[str]) -> Text:
+    """Simple per-character gradient (fast, low-res, looks great on dark terminals)."""
+
+    if not text:
+        return Text("")
+
+    stops = list(colors)
+    if len(stops) < 2:
+        stops = [stops[0], stops[0]]
+
+    n = len(text)
+    rich_text = Text()
+    for i, ch in enumerate(text):
+        t = i / max(1, n - 1)
+        seg = int(t * (len(stops) - 1))
+        seg = min(seg, len(stops) - 2)
+        rich_text.append(ch, style=f"bold {stops[seg]}")
+    return rich_text
+
+
+# ----------------------------
+# Process & Log Collection
+# ----------------------------
+
+@dataclass(frozen=True)
+class Proc:
+    pid: int
+    ppid: int
+    tty: str
+    cmd: str
+
+
+_COPILOT_CMD_RE = re.compile(
+    r"(?i)(?:\bgh\s+copilot\b|\bcopilot\b|copilot-cli|@github/copilot|/copilot(?:\s|$))"
+)
+
+_AGENT_MARKERS_RE = re.compile(
+    r"(?i)(?:\bagent\b|\bsubagent\b|\brubber[-_ ]duck\b|\bcode-review\b|\bexplore\b|\bgeneral-purpose\b|\bstampede\b|\bdispatch\b|\bswarm\b|\btask\b)"
+)
+
+_AGENT_TYPE_RE = re.compile(r"\bagent_type\b\s*[:=]\s*\"([^\"]+)\"", re.IGNORECASE)
+_AGENT_TYPE_ESCAPED_RE = re.compile(r"agent_type\\\"\s*:\\s*\\\"([^\\\"]+)\\\"", re.IGNORECASE)
+
+# Feature 1: Success/failure detection patterns
+_SUCCESS_RE = re.compile(
+    r"(?i)(?:completed successfully|exit code 0|task completed|✓|PASS\b)"
+)
+_FAILURE_RE = re.compile(
+    r"(?i)(?:failed|error|exit code [1-9]\d*|exception|traceback|FAIL\b)"
+)
+
+# Feature 3: Token usage patterns
+_TOKEN_RE = re.compile(
+    r"(?:input_tokens|output_tokens|prompt_tokens|completion_tokens)\s*[:=]\s*(\d+)",
+    re.IGNORECASE,
+)
+_INPUT_TOKEN_RE = re.compile(
+    r"(?:input_tokens|prompt_tokens)\s*[:=]\s*(\d+)", re.IGNORECASE
+)
+_OUTPUT_TOKEN_RE = re.compile(
+    r"(?:output_tokens|completion_tokens)\s*[:=]\s*(\d+)", re.IGNORECASE
+)
+
+# Feature 2: Model family color mapping
+MODEL_FAMILY_COLOR: Dict[str, str] = {
+    "claude": "#B388FF",
+    "gpt": "#7CFF6B",
+    "gemini": "#00D1FF",
+    "mistral": "#FFD166",
+    "llama": "#FF9F1C",
+    "deepseek": "#00F5D4",
+    "o1": "#FF4D6D",
+    "o3": "#FF4D6D",
+    "o4": "#FF4D6D",
+    "unknown": "#8D99AE",
+}
+
+
+def shorten_model(name: str) -> str:
+    """Shorten model names for compact display."""
+    replacements = [
+        ("claude-", "c/"),
+        ("gpt-", "g/"),
+        ("gemini-", "gem/"),
+        ("mistral-", "mis/"),
+    ]
+    short = name
+    for prefix, repl in replacements:
+        if short.startswith(prefix):
+            short = repl + short[len(prefix):]
+            break
+    return short[:20]
+
+
+def model_color(name: str) -> str:
+    """Return a color for a model based on its family."""
+    lower = name.lower()
+    for family, color in MODEL_FAMILY_COLOR.items():
+        if family in lower:
+            return color
+    return MODEL_FAMILY_COLOR["unknown"]
+
+
+@dataclass
+class AgentEvent:
+    ts: int
+    agent_type: str
+    name: Optional[str] = None
+    model: Optional[str] = None
+    source: str = ""  # unique id for dedupe
+    outcome: str = "unknown"  # success, failure, unknown
+    duration_s: Optional[int] = None
+
+
+class ProcessCollector:
+    def collect(self) -> List[Proc]:
+        out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,tty=,command="])
+        text = out.decode("utf-8", errors="replace")
+        procs: List[Proc] = []
+        for line in text.splitlines():
+            parts = line.strip().split(None, 3)
+            if len(parts) < 4:
+                continue
+            try:
+                pid = int(parts[0])
+                ppid = int(parts[1])
+            except ValueError:
+                continue
+            procs.append(Proc(pid=pid, ppid=ppid, tty=parts[2], cmd=parts[3]))
+        return procs
+
+    @staticmethod
+    def is_copilot_process(cmd: str) -> bool:
+        if "agent_pulse.py" in cmd:
+            return False
+        return bool(_COPILOT_CMD_RE.search(cmd))
+
+    @staticmethod
+    def is_agentish_process(cmd: str) -> bool:
+        if "agent_pulse.py" in cmd:
+            return False
+        return ProcessCollector.is_copilot_process(cmd) and bool(_AGENT_MARKERS_RE.search(cmd))
+
+
+class CopilotLogTailer:
+    """Incremental tail of ~/.copilot/logs/*.log with offsets persisted to our DB."""
+
+    def __init__(self, store: "PulseStore"):
+        self.store = store
+        self.log_dir = Path.home() / ".copilot" / "logs"
+
+    def _candidate_files(self, limit: int = 12) -> List[Path]:
+        if not self.log_dir.exists():
+            return []
+        files = sorted(self.log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return files[:limit]
+
+    def poll_new_events(self, max_bytes_per_file: int = 120_000) -> List[AgentEvent]:
+        out: List[AgentEvent] = []
+
+        for path in self._candidate_files():
+            try:
+                last_off = self.store.get_log_offset(str(path))
+                size = path.stat().st_size
+                if last_off > size:
+                    last_off = 0  # rotation
+
+                read_start = last_off
+                read_end = min(size, read_start + max_bytes_per_file)
+                if read_end <= read_start:
+                    continue
+
+                with path.open("rb") as f:
+                    f.seek(read_start)
+                    chunk = f.read(read_end - read_start)
+
+                self.store.set_log_offset(str(path), read_end)
+
+                text = chunk.decode("utf-8", errors="replace")
+                base_source = f"log:{path.name}:{read_start}"
+
+                for i, line in enumerate(text.splitlines()):
+                    # Feature 3: Parse token usage from any line
+                    self._parse_tokens(line, path.name, read_start, i)
+
+                    if "agent_type" not in line:
+                        continue
+
+                    m = _AGENT_TYPE_RE.search(line) or _AGENT_TYPE_ESCAPED_RE.search(line)
+                    if not m:
+                        continue
+
+                    agent_type_raw = m.group(1).strip()
+                    agent_type = agent_type_raw if agent_type_raw in AGENT_TYPES else "custom"
+
+                    name = None
+                    model = None
+                    m_name = re.search(r"\bname\b\s*[:=]\s*\"([^\"]{1,80})\"", line)
+                    if m_name:
+                        name = m_name.group(1)
+                    m_model = re.search(r"\bmodel\b\s*[:=]\s*\"([^\"]{1,80})\"", line)
+                    if m_model:
+                        model = m_model.group(1)
+
+                    # Feature 1: Detect outcome
+                    outcome = "unknown"
+                    if _SUCCESS_RE.search(line):
+                        outcome = "success"
+                    elif _FAILURE_RE.search(line):
+                        outcome = "failure"
+
+                    ts = self._parse_ts(line) or now_ts()
+                    out.append(
+                        AgentEvent(
+                            ts=ts,
+                            agent_type=agent_type,
+                            name=name,
+                            model=model,
+                            source=f"{base_source}:L{i}",
+                            outcome=outcome,
+                        )
+                    )
+
+            except Exception:
+                # Logs are best-effort; dashboard should never crash because of them.
+                continue
+
+        return self.store.insert_agent_events(out)
+
+    def _parse_tokens(self, line: str, filename: str, offset: int, lineno: int) -> None:
+        """Extract token usage from a log line and store it."""
+        input_tok = 0
+        output_tok = 0
+        m_in = _INPUT_TOKEN_RE.search(line)
+        m_out = _OUTPUT_TOKEN_RE.search(line)
+        if not m_in and not m_out:
+            return
+        if m_in:
+            input_tok = int(m_in.group(1))
+        if m_out:
+            output_tok = int(m_out.group(1))
+        # Find model if present in same line
+        m_model = re.search(r"\bmodel\b\s*[:=]\s*\"([^\"]{1,80})\"", line)
+        model = m_model.group(1) if m_model else None
+        ts = self._parse_ts(line) or now_ts()
+        source = f"tok:{filename}:{offset}:L{lineno}"
+        self.store.insert_token_usage(ts, model, input_tok, output_tok, source)
+
+    @staticmethod
+    def _parse_ts(line: str) -> Optional[int]:
+        # Example: 2026-04-12T17:45:37.650Z
+        m = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)", line)
+        if not m:
+            return None
+        try:
+            dt = datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+            return int(dt.timestamp())
+        except Exception:
+            return None
+
+
+# ----------------------------
+# SQLite Storage
+# ----------------------------
+
+class PulseStore:
+    def __init__(self) -> None:
+        base = Path.home() / ".copilot" / "agent-pulse"
+        base.mkdir(parents=True, exist_ok=True)
+        self.db_path = base / "agent-pulse.db"
+        self._con = sqlite3.connect(self.db_path)
+        self._con.execute("PRAGMA journal_mode=WAL")
+        self._con.execute("PRAGMA synchronous=NORMAL")
+        self._init_schema()
+
+    def close(self) -> None:
+        self._con.close()
+
+    def _init_schema(self) -> None:
+        cur = self._con.cursor()
+        cur.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS snapshots (
+              ts INTEGER PRIMARY KEY,
+              active_sessions INTEGER NOT NULL,
+              running_agents_est INTEGER NOT NULL,
+              agent_events_last5m INTEGER NOT NULL,
+              notes_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              ts INTEGER NOT NULL,
+              agent_type TEXT NOT NULL,
+              name TEXT,
+              model TEXT,
+              source TEXT NOT NULL,
+              UNIQUE(source)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_events_ts ON agent_events(ts);
+            CREATE INDEX IF NOT EXISTS idx_agent_events_type ON agent_events(agent_type);
+
+            CREATE TABLE IF NOT EXISTS log_offsets (
+              path TEXT PRIMARY KEY,
+              offset INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS seen_agent_pids (
+              pid INTEGER PRIMARY KEY,
+              first_seen_ts INTEGER NOT NULL,
+              cmd TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS token_usage (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              ts INTEGER NOT NULL,
+              model TEXT,
+              input_tokens INTEGER NOT NULL DEFAULT 0,
+              output_tokens INTEGER NOT NULL DEFAULT 0,
+              source TEXT NOT NULL,
+              UNIQUE(source)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(ts);
+            """
+        )
+        self._con.commit()
+
+        # Feature 1: ALTER TABLE for existing DBs (outcome + duration_s columns)
+        for col, typedef in [("outcome", "TEXT DEFAULT 'unknown'"), ("duration_s", "INTEGER")]:
+            try:
+                self._con.execute(f"ALTER TABLE agent_events ADD COLUMN {col} {typedef}")
+                self._con.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
+    def insert_snapshot(
+        self,
+        ts: int,
+        active_sessions: int,
+        running_agents_est: int,
+        agent_events_last5m: int,
+        notes: Dict,
+    ) -> None:
+        self._con.execute(
+            "INSERT OR REPLACE INTO snapshots(ts, active_sessions, running_agents_est, agent_events_last5m, notes_json) VALUES (?,?,?,?,?)",
+            (ts, active_sessions, running_agents_est, agent_events_last5m, json.dumps(notes, separators=(",", ":"))),
+        )
+        self._con.commit()
+
+    def insert_agent_events(self, events_in: List[AgentEvent]) -> List[AgentEvent]:
+        if not events_in:
+            return []
+
+        inserted: List[AgentEvent] = []
+        cur = self._con.cursor()
+        for ev in events_in:
+            try:
+                cur.execute(
+                    "INSERT INTO agent_events(ts, agent_type, name, model, source, outcome, duration_s) VALUES (?,?,?,?,?,?,?)",
+                    (ev.ts, ev.agent_type, ev.name, ev.model, ev.source, ev.outcome, ev.duration_s),
+                )
+                inserted.append(ev)
+            except sqlite3.IntegrityError:
+                continue
+        self._con.commit()
+        return inserted
+
+    def maybe_record_agent_pid(self, pid: int, ts: int, cmd: str) -> bool:
+        try:
+            self._con.execute(
+                "INSERT INTO seen_agent_pids(pid, first_seen_ts, cmd) VALUES (?,?,?)",
+                (pid, ts, cmd[:500]),
+            )
+            self._con.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def get_log_offset(self, path: str) -> int:
+        cur = self._con.cursor()
+        cur.execute("SELECT offset FROM log_offsets WHERE path=?", (path,))
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+    def set_log_offset(self, path: str, offset: int) -> None:
+        self._con.execute(
+            "INSERT INTO log_offsets(path, offset) VALUES (?,?) ON CONFLICT(path) DO UPDATE SET offset=excluded.offset",
+            (path, int(offset)),
+        )
+        self._con.commit()
+
+    def total_spawned(self) -> int:
+        cur = self._con.cursor()
+        cur.execute("SELECT COUNT(*) FROM agent_events")
+        return int(cur.fetchone()[0])
+
+    def recent_agent_events(self, limit: int = 18) -> List[Tuple[int, str, Optional[str], Optional[str]]]:
+        cur = self._con.cursor()
+        cur.execute(
+            "SELECT ts, agent_type, name, model FROM agent_events ORDER BY ts DESC, id DESC LIMIT ?",
+            (limit,),
+        )
+        return [(int(r[0]), str(r[1]), r[2], r[3]) for r in cur.fetchall()]
+
+    def agent_events_count_since(self, since_ts: int) -> int:
+        cur = self._con.cursor()
+        cur.execute("SELECT COUNT(*) FROM agent_events WHERE ts>=?", (since_ts,))
+        return int(cur.fetchone()[0])
+
+    def agent_events_by_type_since(self, since_ts: int) -> Dict[str, int]:
+        cur = self._con.cursor()
+        cur.execute("SELECT agent_type, COUNT(*) FROM agent_events WHERE ts>=? GROUP BY agent_type", (since_ts,))
+        return {str(k): int(v) for k, v in cur.fetchall()}
+
+    def series_snapshots(self, seconds: int = 240, step: int = 1) -> List[Tuple[int, int, int]]:
+        since = now_ts() - seconds
+        cur = self._con.cursor()
+        cur.execute(
+            "SELECT ts, active_sessions, agent_events_last5m FROM snapshots WHERE ts>=? ORDER BY ts ASC",
+            (since,),
+        )
+        rows = [(int(r[0]), int(r[1]), int(r[2])) for r in cur.fetchall()]
+        if not rows:
+            return []
+
+        out: List[Tuple[int, int, int]] = []
+        row_i = 0
+        for t in range(since, now_ts() + 1, step):
+            while row_i + 1 < len(rows) and rows[row_i + 1][0] <= t:
+                row_i += 1
+            out.append((t, rows[row_i][1], rows[row_i][2]))
+        return out
+
+    def hourly_activity_24h(self) -> List[int]:
+        """Return 24 buckets (one per hour) of agent event counts for last 24h."""
+        now = now_ts()
+        start = now - 24 * 3600
+        cur = self._con.cursor()
+        cur.execute("SELECT ts FROM agent_events WHERE ts>=?", (start,))
+        buckets = [0] * 24
+        for (ts,) in cur.fetchall():
+            hour_idx = min(23, (int(ts) - start) // 3600)
+            buckets[hour_idx] += 1
+        return buckets
+
+    def daily_activity_14d(self) -> List[int]:
+        """Return 14 buckets (one per day) of agent event counts for last 14 days."""
+        now = now_ts()
+        start = now - 14 * 24 * 3600
+        cur = self._con.cursor()
+        cur.execute("SELECT ts FROM agent_events WHERE ts>=?", (start,))
+        buckets = [0] * 14
+        for (ts,) in cur.fetchall():
+            day_idx = min(13, (int(ts) - start) // (24 * 3600))
+            buckets[day_idx] += 1
+        return buckets
+
+    def daily_sessions_14d(self) -> List[int]:
+        """Return 14 buckets of peak active sessions per day for last 14 days."""
+        now = now_ts()
+        start = now - 14 * 24 * 3600
+        cur = self._con.cursor()
+        cur.execute("SELECT ts, active_sessions FROM snapshots WHERE ts>=?", (start,))
+        buckets = [0] * 14
+        for ts, sessions in cur.fetchall():
+            day_idx = min(13, (int(ts) - start) // (24 * 3600))
+            buckets[day_idx] = max(buckets[day_idx], int(sessions))
+        return buckets
+
+    def peak_sessions_since(self, since_ts: int) -> int:
+        """Return peak active sessions since a given timestamp."""
+        cur = self._con.cursor()
+        cur.execute("SELECT MAX(active_sessions) FROM snapshots WHERE ts>=?", (since_ts,))
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def unique_sessions_since(self, since_ts: int) -> int:
+        """Estimate unique session count from snapshots (sum of peak per distinct hour)."""
+        cur = self._con.cursor()
+        cur.execute(
+            "SELECT COUNT(DISTINCT CAST(ts / 3600 AS INTEGER)) FROM snapshots WHERE ts>=? AND active_sessions > 0",
+            (since_ts,),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    # Feature 1: Success rate tracking
+    def success_rate_since(self, since_ts: int) -> Tuple[int, int, int]:
+        """Return (success_count, fail_count, total) since timestamp."""
+        cur = self._con.cursor()
+        cur.execute(
+            "SELECT outcome, COUNT(*) FROM agent_events WHERE ts>=? AND outcome != 'unknown' GROUP BY outcome",
+            (since_ts,),
+        )
+        counts: Dict[str, int] = {}
+        for outcome, cnt in cur.fetchall():
+            counts[str(outcome)] = int(cnt)
+        success = counts.get("success", 0)
+        fail = counts.get("failure", 0)
+        total = success + fail
+        return (success, fail, total)
+
+    # Feature 2: Model distribution
+    def model_distribution_since(self, since_ts: int) -> Dict[str, int]:
+        """Return model->count for events since timestamp."""
+        cur = self._con.cursor()
+        cur.execute(
+            "SELECT model, COUNT(*) FROM agent_events WHERE ts>=? AND model IS NOT NULL GROUP BY model",
+            (since_ts,),
+        )
+        return {str(k): int(v) for k, v in cur.fetchall()}
+
+    # Feature 3: Token usage
+    def insert_token_usage(self, ts: int, model: Optional[str], input_tokens: int, output_tokens: int, source: str) -> None:
+        try:
+            self._con.execute(
+                "INSERT INTO token_usage(ts, model, input_tokens, output_tokens, source) VALUES (?,?,?,?,?)",
+                (ts, model, input_tokens, output_tokens, source),
+            )
+            self._con.commit()
+        except sqlite3.IntegrityError:
+            pass
+
+    def token_totals_since(self, since_ts: int) -> Tuple[int, int]:
+        """Return (input_total, output_total) since timestamp."""
+        cur = self._con.cursor()
+        cur.execute(
+            "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0) FROM token_usage WHERE ts>=?",
+            (since_ts,),
+        )
+        row = cur.fetchone()
+        return (int(row[0]), int(row[1]))
+
+    def token_hourly_24h(self) -> List[int]:
+        """Return 24 buckets of total tokens per hour for last 24h."""
+        now = now_ts()
+        start = now - 24 * 3600
+        cur = self._con.cursor()
+        cur.execute("SELECT ts, input_tokens + output_tokens FROM token_usage WHERE ts>=?", (start,))
+        buckets = [0] * 24
+        for ts_val, total in cur.fetchall():
+            hour_idx = min(23, (int(ts_val) - start) // 3600)
+            buckets[hour_idx] += int(total)
+        return buckets
+
+
+# ----------------------------
+# Metrics
+# ----------------------------
+
+@dataclass
+class ActiveSession:
+    session_id: str
+    pid: int
+    tty: str
+    agent_type: str
+    status: str
+    started_at: float
+
+
+@dataclass
+class PulseMetrics:
+    active_sessions: int
+    sessions_by_tty: Dict[str, int]
+    running_agents_est: int
+    agent_events_last5m: int
+    spawned_all_time: int
+    spawned_today: int
+    spawned_week: int
+    spawned_month: int
+    spawned_by_type_24h: Dict[str, int]
+    recent_events: List[Tuple[int, str, Optional[str], Optional[str]]]
+    velocity: float = 0.0
+    peak_velocity: float = 0.0
+    active_session_list: List[ActiveSession] = None
+    sessions_today: int = 0
+    sessions_week: int = 0
+    sessions_month: int = 0
+    peak_sessions_today: int = 0
+    # Feature 1: Success/failure rate
+    success_rate_24h: float = 0.0
+    error_count_24h: int = 0
+    # Feature 2: Model distribution
+    model_dist_24h: Dict[str, int] = None
+    # Feature 3: Token usage
+    tokens_today: int = 0
+    cost_estimate_today: float = 0.0
+    # Feature 4: Fleet health score
+    health_score: int = 100
+
+    def __post_init__(self):
+        if self.active_session_list is None:
+            self.active_session_list = []
+        if self.model_dist_24h is None:
+            self.model_dist_24h = {}
+
+
+class MetricsEngine:
+    def __init__(self, store: PulseStore) -> None:
+        self.store = store
+        self.procs = ProcessCollector()
+        self.logs = CopilotLogTailer(store)
+        self._peak_velocity: float = 0.0
+        self._started_at: float = time.time()
+        self._session_start_times: Dict[str, float] = {}
+
+    def poll(self) -> PulseMetrics:
+        ts = now_ts()
+
+        # Process-derived snapshot
+        procs = self.procs.collect()
+        sessions_by_tty: Dict[str, int] = {}
+        running_agents_est = 0
+        active_session_list: List[ActiveSession] = []
+        seen_ttys: set = set()
+
+        for p in procs:
+            if self.procs.is_copilot_process(p.cmd) and p.tty not in ("?", "??"):
+                sessions_by_tty[p.tty] = sessions_by_tty.get(p.tty, 0) + 1
+                if p.tty not in seen_ttys:
+                    seen_ttys.add(p.tty)
+                    sid = f"sess_{p.tty[-4:].replace('/', '')}"
+                    if sid not in self._session_start_times:
+                        self._session_start_times[sid] = time.time()
+                    # Guess agent type from command
+                    atype = "copilot"
+                    for t in AGENT_TYPES:
+                        if t in p.cmd.lower():
+                            atype = t
+                            break
+                    active_session_list.append(ActiveSession(
+                        session_id=sid, pid=p.pid, tty=p.tty,
+                        agent_type=atype, status="RUN",
+                        started_at=self._session_start_times[sid],
+                    ))
+
+            if self.procs.is_agentish_process(p.cmd):
+                running_agents_est += 1
+                if self.store.maybe_record_agent_pid(p.pid, ts, p.cmd):
+                    self.store.insert_agent_events([AgentEvent(ts=ts, agent_type="unknown", source=f"ps:{p.pid}")])
+
+        active_sessions = len(sessions_by_tty)
+
+        # Log-derived agent launches
+        self.logs.poll_new_events()
+
+        agent_events_last5m = self.store.agent_events_count_since(ts - 5 * 60)
+        spawned_all_time = self.store.total_spawned()
+
+        # Rolling windows (more useful in a live dashboard than strict calendar buckets)
+        spawned_today = self.store.agent_events_count_since(ts - 24 * 3600)
+        spawned_week = self.store.agent_events_count_since(ts - 7 * 24 * 3600)
+        spawned_month = self.store.agent_events_count_since(ts - 30 * 24 * 3600)
+
+        spawned_by_type_24h = self.store.agent_events_by_type_since(ts - 24 * 3600)
+        recent_events = self.store.recent_agent_events(limit=18)
+
+        # Velocity: agents launched per hour over last hour
+        spawned_last_hour = self.store.agent_events_count_since(ts - 3600)
+        elapsed_hours = min(1.0, (time.time() - self._started_at) / 3600) or 1.0
+        velocity = round(spawned_last_hour / elapsed_hours, 1) if elapsed_hours > 0 else 0.0
+        if velocity > self._peak_velocity:
+            self._peak_velocity = velocity
+
+        # Session counts
+        sessions_today = self.store.unique_sessions_since(ts - 24 * 3600)
+        sessions_week = self.store.unique_sessions_since(ts - 7 * 24 * 3600)
+        sessions_month = self.store.unique_sessions_since(ts - 30 * 24 * 3600)
+        peak_sessions_today = self.store.peak_sessions_since(ts - 24 * 3600)
+
+        self.store.insert_snapshot(
+            ts=ts,
+            active_sessions=active_sessions,
+            running_agents_est=running_agents_est,
+            agent_events_last5m=agent_events_last5m,
+            notes={"sessions_by_tty": sessions_by_tty, "running_agents_est": running_agents_est},
+        )
+
+        # Feature 1: Success rate
+        success_count, fail_count, rate_total = self.store.success_rate_since(ts - 24 * 3600)
+        success_rate_24h = round(success_count / rate_total, 3) if rate_total > 0 else 0.0
+        error_count_24h = fail_count
+
+        # Feature 2: Model distribution
+        model_dist_24h = self.store.model_distribution_since(ts - 24 * 3600)
+
+        # Feature 3: Token usage + cost estimation
+        input_tok, output_tok = self.store.token_totals_since(ts - 24 * 3600)
+        tokens_today = input_tok + output_tok
+        cost_estimate_today = round((input_tok * 3.0 / 1_000_000) + (output_tok * 15.0 / 1_000_000), 4)
+
+        # Feature 4: Health score
+        health_score = 100
+        if rate_total > 0:
+            health_score -= int(40 * (1.0 - success_rate_24h))
+        if spawned_today == 0:
+            health_score -= 15
+        if active_sessions > 0 and running_agents_est == 0:
+            health_score -= 15
+        _, errors_1h, _ = self.store.success_rate_since(ts - 3600)
+        health_score -= min(30, errors_1h * 6)
+        health_score = int(clamp(health_score, 0, 100))
+
+        return PulseMetrics(
+            active_sessions=active_sessions,
+            sessions_by_tty=sessions_by_tty,
+            running_agents_est=running_agents_est,
+            agent_events_last5m=agent_events_last5m,
+            spawned_all_time=spawned_all_time,
+            spawned_today=spawned_today,
+            spawned_week=spawned_week,
+            spawned_month=spawned_month,
+            spawned_by_type_24h=spawned_by_type_24h,
+            recent_events=recent_events,
+            velocity=velocity,
+            peak_velocity=self._peak_velocity,
+            active_session_list=active_session_list,
+            sessions_today=sessions_today,
+            sessions_week=sessions_week,
+            sessions_month=sessions_month,
+            peak_sessions_today=peak_sessions_today,
+            success_rate_24h=success_rate_24h,
+            error_count_24h=error_count_24h,
+            model_dist_24h=model_dist_24h,
+            tokens_today=tokens_today,
+            cost_estimate_today=cost_estimate_today,
+            health_score=health_score,
+        )
+
+
+# ----------------------------
+# Textual Widgets
+# ----------------------------
+
+class NeonLogo(Static):
+    metrics: Optional[PulseMetrics] = reactive(None)
+    tick: int = reactive(0)
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._started_at = time.time()
+        self._pid = __import__("os").getpid()
+
+    def render(self) -> Panel:
+        logo = Text(ASCII_LOGO, style="bold white")
+        tagline = Text("⚡ for GitHub Copilot CLI", style="bold #FF4D6D")
+
+        m = self.metrics
+        heart = _HEARTBEATS[self.tick % len(_HEARTBEATS)]
+        if m:
+            agents = m.running_agents_est
+            sessions = m.active_sessions
+            monitor_line = Text.assemble(
+                (f"  {heart}  ", ""),
+                ("monitoring ", "#8D99AE"),
+                (str(agents), "bold #7CFF6B"),
+                (" agents across ", "#8D99AE"),
+                (str(sessions), "bold #00D1FF"),
+                (" active sessions", "#8D99AE"),
+            )
+        else:
+            monitor_line = Text(f"  {heart}  Initializing…", style="#8D99AE")
+
+        elapsed = int(time.time() - self._started_at)
+        h, rem = divmod(elapsed, 3600)
+        mi, s = divmod(rem, 60)
+        uptime = f"{h:02d}:{mi:02d}:{s:02d}"
+        version_line = Text.assemble(
+            (f"AGENT PULSE v{VERSION}", "#8D99AE"),
+            ("  |  ", "#555"),
+            ("uptime: ", "#8D99AE"),
+            (uptime, "bold #FFD166"),
+            ("  |  ", "#555"),
+            ("pid: ", "#8D99AE"),
+            (str(self._pid), "bold #00D1FF"),
+        )
+
+        return Panel(
+            Group(
+                Align.center(logo),
+                Align.center(tagline),
+                Align.center(monitor_line),
+                Align.center(version_line),
+            ),
+            border_style="#00D1FF",
+            padding=(0, 2),
+        )
+
+
+class StatPanel(Static):
+    metrics: Optional[PulseMetrics] = reactive(None)
+    tick: int = reactive(0)
+
+    def render(self) -> Panel:
+        m = self.metrics
+        if not m:
+            return Panel("Initializing…", border_style="#00D1FF", title="[bold #00D1FF]● LIVE METRICS[/]")
+
+        lamp_color = "green" if m.active_sessions > 0 else "yellow"
+        lamp = Text("●", style=f"bold {lamp_color}")
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[self.tick % 10]
+
+        def bar(val: int, max_val: int = 20, width: int = 16) -> Text:
+            filled = int(round((val / max(max_val, 1)) * width))
+            filled = max(0, min(width, filled))
+            return Text("█" * filled + "░" * (width - filled), style="bold #7CFF6B")
+
+        t = Table.grid(padding=(0, 2))
+        t.add_column(justify="left")
+        t.add_column(justify="right")
+        t.add_column(justify="left")
+        t.add_row(
+            Text("Active Sessions:", style="bold white"),
+            Text(str(m.active_sessions), style="bold #7CFF6B"),
+            bar(m.active_sessions),
+        )
+        t.add_row(
+            Text("Running Agents :", style="bold white"),
+            Text(str(m.running_agents_est), style="bold #B388FF"),
+            bar(m.running_agents_est),
+        )
+        t.add_row(
+            Text("Velocity       :", style="bold white"),
+            Text(f"{m.velocity}/hr", style="bold #FFD166"),
+            Text(f"peak: {m.peak_velocity}/hr", style="#8D99AE"),
+        )
+        trend = "▲ trending up" if m.spawned_today > 0 else "—"
+        t.add_row(
+            Text("Today's Total  :", style="bold white"),
+            Text(str(m.spawned_today), style="bold #FF4D6D"),
+            Text(trend, style="#8D99AE"),
+        )
+
+        status_line = Text.assemble(
+            spinner, " ", ("LIVE", "bold #00F5D4"), "  ", lamp, "  ", ("PULSE LOCK", "bold #8D99AE")
+        )
+        return Panel(Group(t, "", status_line), border_style="#00D1FF", title="[bold #00D1FF]● LIVE METRICS[/]")
+
+
+class HistoryPanel(Static):
+    """14-day trend analysis with sparklines and daily breakdowns."""
+    metrics: Optional[PulseMetrics] = reactive(None)
+
+    def __init__(self, store: PulseStore, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.store = store
+
+    def render(self) -> Panel:
+        m = self.metrics
+        if not m:
+            return Panel("…", border_style="#FF4D6D", title="[bold #00D1FF]📊 TREND ANALYSIS[/]")
+
+        # 14-day sparklines
+        daily_agents = self.store.daily_activity_14d()
+        daily_sessions = self.store.daily_sessions_14d()
+
+        t = Table.grid(padding=(0, 1))
+        t.add_column(justify="left", min_width=12)
+        t.add_column(justify="right", width=6)
+        t.add_column(justify="right", width=6)
+        t.add_column(justify="right", width=6)
+
+        # Header
+        t.add_row(
+            Text("", style=""),
+            Text("24h", style="bold #8D99AE"),
+            Text("7d", style="bold #8D99AE"),
+            Text("30d", style="bold #8D99AE"),
+        )
+        # Sessions row
+        t.add_row(
+            Text("Sessions", style="bold #00D1FF"),
+            Text(str(m.sessions_today), style="bold #FFD166"),
+            Text(str(m.sessions_week), style="bold #00F5D4"),
+            Text(str(m.sessions_month), style="bold #B388FF"),
+        )
+        # Agents row
+        t.add_row(
+            Text("Agents", style="bold #7CFF6B"),
+            Text(str(m.spawned_today), style="bold #FFD166"),
+            Text(str(m.spawned_week), style="bold #00F5D4"),
+            Text(str(m.spawned_month), style="bold #B388FF"),
+        )
+        t.add_row(Text(""), Text(""), Text(""), Text(""))
+
+        # Sparklines
+        t2 = Table.grid(padding=(0, 2))
+        t2.add_column(justify="left")
+        t2.add_column(justify="left")
+        t2.add_row(
+            Text("14d agents  ", style="bold #7CFF6B"),
+            Text(sparkline(daily_agents, width=14), style="#7CFF6B"),
+        )
+        t2.add_row(
+            Text("14d sessions", style="bold #00D1FF"),
+            Text(sparkline(daily_sessions, width=14), style="#00D1FF"),
+        )
+
+        # Trend arrow
+        if len(daily_agents) >= 2 and daily_agents[-1] > daily_agents[-2]:
+            trend = Text("  ▲ trending up", style="bold #7CFF6B")
+        elif len(daily_agents) >= 2 and daily_agents[-1] < daily_agents[-2]:
+            trend = Text("  ▼ trending down", style="bold #FF4D6D")
+        else:
+            trend = Text("  ► steady", style="#8D99AE")
+
+        all_time = Text.assemble(("All-time: ", "#8D99AE"), (str(m.spawned_all_time), "bold #00D1FF"), (" agents", "#8D99AE"))
+
+        return Panel(Group(t, t2, trend, all_time), border_style="#FF4D6D", title="[bold #00D1FF]📊 TREND ANALYSIS[/]")
+
+
+class MixPanel(Static):
+    metrics: Optional[PulseMetrics] = reactive(None)
+
+    def render(self) -> Panel:
+        m = self.metrics
+        if not m:
+            return Panel("…", border_style="#7CFF6B", title="[bold #FFD166]◆ AGENT BREAKDOWN[/]")
+
+        by_type = dict(m.spawned_by_type_24h)
+        if not by_type:
+            body = Text("No launches observed yet.\n(Leave Agent Pulse running.)", style="#8D99AE")
+            return Panel(body, border_style="#7CFF6B", title="[bold #FFD166]◆ AGENT BREAKDOWN[/]")
+
+        total = max(sum(by_type.values()), 1)
+        maxv = max(by_type.values())
+        type_icons = {
+            "explore": "⚡", "task": "⚙", "general-purpose": "●",
+            "code-review": "🔍", "rubber-duck": "🦆",
+        }
+
+        table = Table.grid(padding=(0, 1))
+        table.add_column("icon", justify="left", width=2)
+        table.add_column("type", justify="left", min_width=18)
+        table.add_column("n", justify="right", width=4)
+        table.add_column("pct", justify="right", width=6)
+        table.add_column("bar", justify="left")
+
+        def bar(n: int, width: int = 16) -> Text:
+            filled = int(round((n / maxv) * width))
+            filled = max(0, min(width, filled))
+            return Text("█" * filled + "░" * (width - filled))
+
+        for k in sorted(by_type.keys(), key=lambda x: (-by_type[x], x)):
+            color = TYPE_COLOR.get(k, TYPE_COLOR["custom"])
+            pct = round(100 * by_type[k] / total)
+            icon = type_icons.get(k, "●")
+            table.add_row(
+                Text(icon, style=color),
+                Text(k, style=f"bold {color}"),
+                Text(str(by_type[k]), style=f"bold {color}"),
+                Text(f"({pct:2d}%)", style="#8D99AE"),
+                bar(by_type[k]).stylize(color),
+            )
+
+        return Panel(table, border_style="#7CFF6B", title="[bold #FFD166]◆ AGENT BREAKDOWN[/]")
+
+
+class SignalPanel(Static):
+    def __init__(self, store: PulseStore, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.store = store
+
+    def render(self) -> Panel:
+        heat_chars = " ░▒▓█"
+
+        # 24h activity heatmap
+        hourly = self.store.hourly_activity_24h()
+        max_h = max(max(hourly), 1)
+        heatmap = Text()
+        for h_val in hourly:
+            idx = min(4, int((h_val / max_h) * 4))
+            color = ["#1a1a2e", "#2d6a4f", "#52b788", "#FFD166", "#FF4D6D"][idx]
+            heatmap.append(heat_chars[idx], style=f"bold {color}")
+
+        # Real-time signal sparklines
+        series = self.store.series_snapshots(seconds=240)
+        if series:
+            sessions = [float(r[1]) for r in series]
+            launches = [float(r[2]) for r in series]
+        else:
+            sessions = [0]
+            launches = [0]
+
+        grid = Table.grid(padding=(0, 1))
+        grid.add_column(justify="left")
+        grid.add_column(justify="left")
+
+        grid.add_row(
+            Text("🔥 24h heatmap", style="bold #FF4D6D"),
+            heatmap,
+        )
+        grid.add_row(
+            Text("", style="#8D99AE"),
+            Text("0h          12h         23h", style="#555"),
+        )
+        grid.add_row(Text("", style=""), Text("", style=""))
+        grid.add_row(
+            Text("sessions   ", style="bold #7CFF6B"),
+            Text(sparkline(sessions, width=24), style="#7CFF6B"),
+        )
+        grid.add_row(
+            Text("launches(5m)", style="bold #FFD166"),
+            Text(sparkline(launches, width=24), style="#FFD166"),
+        )
+        return Panel(grid, border_style="#B388FF", title="[bold #FF4D6D]🔥 HEATMAP + SIGNAL[/]")
+
+
+class RecentTable(DataTable):
+    def on_mount(self) -> None:
+        self.add_columns("AGE", "TYPE", "NAME", "MODEL")
+        self.zebra_stripes = True
+        self.show_cursor = False
+
+    def update_rows(self, rows: List[Tuple[int, str, Optional[str], Optional[str]]]) -> None:
+        self.clear()
+        now = now_ts()
+        for ts, typ, name, model in rows:
+            age = human_age(max(0, now - ts))
+            color = TYPE_COLOR.get(typ, TYPE_COLOR["custom"])
+            self.add_row(
+                Text(age, style="#8D99AE"),
+                Text(typ, style=f"bold {color}"),
+                Text(name or "—", style="#C7F9CC" if name else "#8D99AE"),
+                Text(model or "—", style="#8D99AE"),
+            )
+
+
+class ActiveSessionsPanel(Static):
+    metrics: Optional[PulseMetrics] = reactive(None)
+
+    def render(self) -> Panel:
+        m = self.metrics
+        if not m or not m.active_session_list:
+            return Panel(
+                Text("No active sessions detected", style="#8D99AE"),
+                border_style="#00ff87",
+                title="[bold #00ff87]▶ ACTIVE SESSIONS[/]",
+            )
+
+        t = Table.grid(padding=(0, 2))
+        t.add_column("sid", justify="left", min_width=12)
+        t.add_column("pid", justify="right", width=7)
+        t.add_column("type", justify="left", min_width=18)
+        t.add_column("status", justify="center", width=8)
+        t.add_column("runtime", justify="right", width=8)
+
+        t.add_row(
+            Text("SESSION-ID", style="bold #8D99AE"),
+            Text("PID", style="bold #8D99AE"),
+            Text("TYPE", style="bold #8D99AE"),
+            Text("STATUS", style="bold #8D99AE"),
+            Text("RUNTIME", style="bold #8D99AE"),
+        )
+
+        now = time.time()
+        for s in m.active_session_list[:8]:
+            elapsed = int(now - s.started_at)
+            mi, sec = divmod(elapsed, 60)
+            runtime = f"{mi:02d}:{sec:02d}"
+            color = TYPE_COLOR.get(s.agent_type, TYPE_COLOR["custom"])
+            status_color = "#7CFF6B" if s.status == "RUN" else "#FFD166"
+            t.add_row(
+                Text(s.session_id, style="bold #00D1FF"),
+                Text(str(s.pid), style="#C7F9CC"),
+                Text(s.agent_type, style=f"bold {color}"),
+                Text(s.status, style=f"bold {status_color}"),
+                Text(runtime, style="bold #00F5D4"),
+            )
+
+        return Panel(t, border_style="#00ff87", title="[bold #00ff87]▶ ACTIVE SESSIONS[/]")
+
+
+BUILTIN_AGENTS = {
+    "task":             ("⚙", "Execute commands, run tests/builds", "#00D1FF"),
+    "explore":          ("⚡", "Fast codebase exploration & research", "#7CFF6B"),
+    "general-purpose":  ("●", "Full-capability multi-step agent", "#B388FF"),
+    "code-review":      ("🔍", "High-signal code review", "#FF4D6D"),
+    "rubber-duck":      ("🦆", "Interactive debugging companion", "#FFD166"),
+    "dispatch-worker":  ("📡", "Parallel multi-terminal worker", "#00F5D4"),
+    "stampede-agent":   ("🐎", "Stampede orchestration worker", "#FF9F1C"),
+    "swarm-command":    ("🐝", "Multi-model swarm orchestrator", "#80FFDB"),
+}
+
+CUSTOM_AGENT_COLORS = [
+    "#FF9F1C", "#80FFDB", "#C7F9CC", "#00D1FF", "#B388FF", "#FFD166", "#FF4D6D",
+]
+
+
+def discover_installed_agents() -> List[Tuple[str, str, str, str]]:
+    """Dynamically discover installed agents from ~/.copilot/agents/."""
+    agents_dir = Path.home() / ".copilot" / "agents"
+    discovered: List[Tuple[str, str, str, str]] = []
+    seen_names: set = set()
+
+    # Always include builtins first
+    for name, (icon, desc, color) in BUILTIN_AGENTS.items():
+        discovered.append((name, icon, desc, color))
+        seen_names.add(name)
+
+    # Scan for custom agents
+    if agents_dir.exists():
+        for agent_file in sorted(agents_dir.glob("*.agent.md")):
+            try:
+                agent_name = agent_file.stem.replace(".agent", "")
+                if agent_name in seen_names:
+                    continue
+                seen_names.add(agent_name)
+                # Try to read description from file
+                desc = "Custom agent"
+                try:
+                    content = agent_file.read_text(errors="replace")[:500]
+                    for line in content.splitlines():
+                        stripped = line.strip().lstrip("#").strip()
+                        if stripped and not stripped.startswith("---"):
+                            desc = stripped[:60]
+                            break
+                except Exception:
+                    pass
+                color_idx = len(discovered) % len(CUSTOM_AGENT_COLORS)
+                discovered.append((agent_name, "🔮", desc, CUSTOM_AGENT_COLORS[color_idx]))
+            except Exception:
+                continue
+
+    return discovered
+
+
+class InstalledAgentsPanel(Static):
+    def render(self) -> Panel:
+        agents = discover_installed_agents()
+        t = Table.grid(padding=(0, 2))
+        t.add_column("icon", justify="left", width=2)
+        t.add_column("name", justify="left", min_width=20)
+        t.add_column("desc", justify="left")
+
+        for name, icon, desc, color in agents:
+            t.add_row(
+                Text(icon, style=color),
+                Text(name, style=f"bold {color}"),
+                Text(desc, style="#8D99AE"),
+            )
+
+        return Panel(t, border_style="#B388FF", title=f"[bold #B388FF]⧡ INSTALLED AGENTS · {len(agents)}[/]")
+
+
+# Feature 4: Health Gauge Widget
+class HealthGauge(Static):
+    metrics: Optional[PulseMetrics] = reactive(None)
+    tick: int = reactive(0)
+
+    def render(self) -> Panel:
+        m = self.metrics
+        if not m:
+            return Panel("…", border_style="#00D1FF", title="[bold #00F5D4]♥ FLEET HEALTH[/]")
+
+        score = m.health_score
+        if score >= 90:
+            label, color = "EXCELLENT", "#7CFF6B"
+        elif score >= 70:
+            label, color = "GOOD", "#00F5D4"
+        elif score >= 45:
+            label, color = "WARNING", "#FFD166"
+        else:
+            label, color = "CRITICAL", "#FF4D6D"
+
+        bar_width = 24
+        filled = int(round(score / 100 * bar_width))
+        filled = max(0, min(bar_width, filled))
+        gauge = Text()
+        gauge.append("█" * filled, style=f"bold {color}")
+        gauge.append("░" * (bar_width - filled), style="#2a2a3e")
+
+        score_text = Text.assemble(
+            ("  ", ""),
+            (str(score), f"bold {color}"),
+            ("/100  ", "#8D99AE"),
+            (label, f"bold {color}"),
+        )
+
+        # Success rate line
+        sr_text = Text.assemble(
+            ("Success: ", "#8D99AE"),
+            (f"{m.success_rate_24h:.0%}", "bold #7CFF6B" if m.success_rate_24h >= 0.9 else "bold #FFD166"),
+            ("  Errors: ", "#8D99AE"),
+            (str(m.error_count_24h), "bold #FF4D6D" if m.error_count_24h > 0 else "#8D99AE"),
+        )
+
+        pulse = "●" if self.tick % 2 == 0 else "○"
+        status = Text.assemble((pulse + " ", f"bold {color}"), ("MONITORING", f"bold {color}"))
+
+        return Panel(
+            Group(gauge, score_text, "", sr_text, status),
+            border_style=color,
+            title="[bold #00F5D4]♥ FLEET HEALTH[/]",
+        )
+
+
+# Feature 2: Model Distribution Widget
+class ModelDistPanel(Static):
+    metrics: Optional[PulseMetrics] = reactive(None)
+
+    def render(self) -> Panel:
+        m = self.metrics
+        if not m or not m.model_dist_24h:
+            body = Text("No model data yet.\n(Agent launches with model info will appear here.)", style="#8D99AE")
+            return Panel(body, border_style="#B388FF", title="[bold #B388FF]🧠 MODEL DISTRIBUTION[/]")
+
+        dist = m.model_dist_24h
+        total = max(sum(dist.values()), 1)
+        maxv = max(dist.values())
+
+        table = Table.grid(padding=(0, 1))
+        table.add_column("model", justify="left", min_width=14)
+        table.add_column("n", justify="right", width=4)
+        table.add_column("pct", justify="right", width=6)
+        table.add_column("bar", justify="left")
+
+        bar_width = 14
+        for model_name in sorted(dist.keys(), key=lambda x: (-dist[x], x)):
+            color = model_color(model_name)
+            short = shorten_model(model_name)
+            cnt = dist[model_name]
+            pct = round(100 * cnt / total)
+            filled = int(round((cnt / maxv) * bar_width))
+            filled = max(0, min(bar_width, filled))
+            bar = Text("█" * filled + "░" * (bar_width - filled), style=color)
+            table.add_row(
+                Text(short, style=f"bold {color}"),
+                Text(str(cnt), style=f"bold {color}"),
+                Text(f"({pct:2d}%)", style="#8D99AE"),
+                bar,
+            )
+
+        return Panel(table, border_style="#B388FF", title="[bold #B388FF]🧠 MODEL DISTRIBUTION[/]")
+
+
+# Feature 3: Token Usage Widget
+class TokenUsagePanel(Static):
+    metrics: Optional[PulseMetrics] = reactive(None)
+
+    def __init__(self, store: PulseStore, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.store = store
+
+    def render(self) -> Panel:
+        m = self.metrics
+        if not m:
+            return Panel("…", border_style="#FFD166", title="[bold #FFD166]🪙 TOKEN USAGE[/]")
+
+        def fmt_tokens(n: int) -> str:
+            if n >= 1_000_000:
+                return f"{n / 1_000_000:.1f}M"
+            if n >= 1_000:
+                return f"{n / 1_000:.1f}K"
+            return str(n)
+
+        t = Table.grid(padding=(0, 2))
+        t.add_column(justify="left")
+        t.add_column(justify="right")
+
+        t.add_row(
+            Text("Tokens (24h):", style="bold white"),
+            Text(fmt_tokens(m.tokens_today), style="bold #00D1FF"),
+        )
+        t.add_row(
+            Text("Est. Cost:", style="bold white"),
+            Text(f"${m.cost_estimate_today:.4f}", style="bold #7CFF6B" if m.cost_estimate_today < 1.0 else "bold #FFD166"),
+        )
+
+        # Mini sparkline of hourly token usage
+        hourly = self.store.token_hourly_24h()
+        spark = Text("24h: ", style="#8D99AE")
+        spark.append(sparkline(hourly, width=20), style="#00D1FF")
+
+        cost_note = Text("(est: $3/M in, $15/M out)", style="#555")
+
+        return Panel(
+            Group(t, "", spark, cost_note),
+            border_style="#FFD166",
+            title="[bold #FFD166]🪙 TOKEN USAGE[/]",
+        )
+
+
+class GlowTitle(Static):
+    """Small title strip used above bordered boxes."""
+
+    phase = reactive(0)
+
+    def __init__(self, label: str, *, id: Optional[str] = None) -> None:
+        super().__init__(id=id)
+        self.label = label
+
+    def render(self) -> Text:
+        palettes = [
+            ("#00F5D4", "#00D1FF"),
+            ("#FFD166", "#FF4D6D"),
+            ("#7CFF6B", "#B388FF"),
+        ]
+        a, b = palettes[self.phase % len(palettes)]
+        return gradient_text(self.label, (a, b))
+
+
+# ----------------------------
+# Textual App
+# ----------------------------
+
+class AgentPulseApp(App):
+    CSS_PATH = "agent_pulse.tcss"
+    ENABLE_COMMAND_PALETTE = False
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+        ("r", "refresh", "Refresh"),
+        ("space", "pause_resume", "⏸ Pause"),
+        ("t", "cycle_timeframe", "⏱ Time"),
+        ("e", "export_snapshot", "📤 Export"),
+    ]
+
+    # Feature 6: Pause state and timeframe
+    _paused: bool = False
+    _timeframe_index: int = 2  # default 24h
+    _timeframes = [("1h", 3600), ("6h", 6 * 3600), ("24h", 24 * 3600), ("7d", 7 * 24 * 3600)]
+
+    # Feature 5: Alert tracking
+    _prev_spawned: int = 0
+    _prev_error_rate_high: bool = False
+    _alerted_milestones: set = None
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.store = PulseStore()
+        self.engine = MetricsEngine(self.store)
+        self._alerted_milestones = set()
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            NeonLogo(id="logo"),
+            Grid(
+                HealthGauge(id="health"),
+                StatPanel(id="stats"),
+                HistoryPanel(self.store, id="history"),
+                SignalPanel(self.store, id="signal"),
+                id="top_grid",
+            ),
+            Grid(
+                MixPanel(id="mix"),
+                ModelDistPanel(id="model_dist"),
+                id="mid_grid",
+            ),
+            Grid(
+                ActiveSessionsPanel(id="sessions"),
+                InstalledAgentsPanel(id="installed"),
+                id="bot_grid",
+            ),
+            Vertical(
+                GlowTitle("RECENT LAUNCHES", id="recent_title"),
+                RecentTable(id="recent"),
+                id="recent_box",
+            ),
+            Footer(),
+            id="root",
+        )
+
+    def on_mount(self) -> None:
+        self.logo = self.query_one("#logo", NeonLogo)
+        self.health_gauge = self.query_one("#health", HealthGauge)
+        self.stats = self.query_one("#stats", StatPanel)
+        self.history = self.query_one("#history", HistoryPanel)
+        self.mix = self.query_one("#mix", MixPanel)
+        self.model_dist = self.query_one("#model_dist", ModelDistPanel)
+        self.sessions_panel = self.query_one("#sessions", ActiveSessionsPanel)
+        self.recent_title = self.query_one("#recent_title", GlowTitle)
+        self.recent = self.query_one("#recent", RecentTable)
+
+        self.set_interval(0.25, self._tick)
+        self.set_interval(1.0, self._poll)
+        self._poll()
+
+    def action_refresh(self) -> None:
+        self._poll()
+
+    def action_pause_resume(self) -> None:
+        self._paused = not self._paused
+        if self._paused:
+            self.notify("⏸ Dashboard paused", timeout=3)
+        else:
+            self.notify("▶ Dashboard resumed", timeout=3)
+
+    def action_cycle_timeframe(self) -> None:
+        self._timeframe_index = (self._timeframe_index + 1) % len(self._timeframes)
+        label, _ = self._timeframes[self._timeframe_index]
+        self.notify(f"⏱ Timeframe: {label}", timeout=3)
+        self._poll()
+
+    def action_export_snapshot(self) -> None:
+        export_dir = Path.home() / ".copilot" / "agent-pulse"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        ts_str = datetime.now().strftime("%Y%m%d-%H%M%S")
+        export_path = export_dir / f"export-{ts_str}.json"
+        try:
+            m = self.engine.poll()
+            data = {
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "active_sessions": m.active_sessions,
+                "running_agents_est": m.running_agents_est,
+                "spawned_all_time": m.spawned_all_time,
+                "spawned_today": m.spawned_today,
+                "spawned_week": m.spawned_week,
+                "spawned_month": m.spawned_month,
+                "spawned_by_type_24h": m.spawned_by_type_24h,
+                "velocity": m.velocity,
+                "peak_velocity": m.peak_velocity,
+                "success_rate_24h": m.success_rate_24h,
+                "error_count_24h": m.error_count_24h,
+                "health_score": m.health_score,
+                "tokens_today": m.tokens_today,
+                "cost_estimate_today": m.cost_estimate_today,
+                "model_dist_24h": m.model_dist_24h,
+            }
+            with open(export_path, "w") as f:
+                json.dump(data, f, indent=2)
+            self.notify(f"📤 Exported to {export_path.name}", timeout=5)
+        except Exception as e:
+            self.notify(f"Export failed: {e}", severity="error", timeout=5)
+
+    def _tick(self) -> None:
+        self.logo.tick += 1
+        self.stats.tick += 1
+        self.health_gauge.tick += 1
+
+    def _poll(self) -> None:
+        if self._paused:
+            return
+        m = self.engine.poll()
+
+        # Feature 5: Alert on new agent launches
+        if self._prev_spawned > 0 and m.spawned_all_time > self._prev_spawned:
+            diff = m.spawned_all_time - self._prev_spawned
+            if m.recent_events:
+                latest_type = m.recent_events[0][1]
+                self.notify(f"⚡ New {latest_type} agent launched", timeout=4)
+
+        # Feature 5: Error rate alert
+        error_high = m.error_count_24h > 3
+        if error_high and not self._prev_error_rate_high:
+            self.notify("🔴 Error rate elevated", severity="error", timeout=6)
+        self._prev_error_rate_high = error_high
+
+        # Feature 5: Milestones
+        for milestone in (10, 50, 100, 500, 1000):
+            if m.spawned_all_time >= milestone and milestone not in self._alerted_milestones:
+                self._alerted_milestones.add(milestone)
+                if self._prev_spawned > 0:  # don't alert on first load
+                    self.notify(f"🎉 Milestone: {milestone} agents!", timeout=8)
+
+        self._prev_spawned = m.spawned_all_time
+
+        # Update all widgets
+        self.logo.metrics = m
+        self.health_gauge.metrics = m
+        self.stats.metrics = m
+        self.history.metrics = m
+        self.mix.metrics = m
+        self.model_dist.metrics = m
+        self.sessions_panel.metrics = m
+        self.recent.update_rows(m.recent_events)
+
+    def on_shutdown(self) -> None:
+        self.store.close()
+
+
+VERSION = "2.1.0"
+
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
    /   \ / __|| __| \| |_   _| | _ \| | | | |  / __| __|
@@ -107,1237 +1623,26 @@ BANNER_ART = r"""
    |_|_| \___||___|_|\_| |_|   |_|   \___/|____|___/___|
 """
 
-BANNER_SUBTITLE = "Agent Dashboard for the Copilot CLI"
 
-BANNER_COMPACT = "  ⚡ Agent Pulse  ·  Agent Dashboard for the Copilot CLI"
+def _show_startup_splash() -> None:
+    """Animated boot splash before launching the Textual app."""
+    from rich.console import Console
+    from rich.align import Align as RAlign
 
-# ─── Dashboard start time (from A — for uptime tracking) ─────────────────────
-_DASHBOARD_START = datetime.datetime.now()
-
-# ─── Peak concurrent tracking (from A — in-memory for live mode) ─────────────
-_peak_concurrent_sessions = 0
-_peak_concurrent_procs = 0
-_last_agent_launched_ts: str | None = None
-
-# ─── Heartbeat animation frames (from A) ─────────────────────────────────────
-HEARTBEAT_FRAMES = ["💗", "💖", "💗", "💓", "❤️ ", "💓", "💗", "💖"]
-HEARTBEAT_BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-# ─── Pulse wave animation (from C) ───────────────────────────────────────────
-PULSE_WAVE_CHARS = "▁▂▃▄▅▆▇█▇▆▅▄▃▂"
-
-# ─── Spark / bar characters ──────────────────────────────────────────────────
-SPARK_CHARS = " ▁▂▃▄▅▆▇█"
-
-# ─── Heatmap blocks (from D) ─────────────────────────────────────────────────
-HEATMAP_BLOCKS = " ░▒▓█"
-
-# ─── SIGWINCH signal handler for terminal resize (from E) ────────────────────
-_terminal_resized = False
-
-def _sigwinch_handler(signum, frame):
-    global _terminal_resized
-    _terminal_resized = True
-
-if hasattr(signal, 'SIGWINCH'):
-    signal.signal(signal.SIGWINCH, _sigwinch_handler)
-
-def check_terminal_resized() -> bool:
-    global _terminal_resized
-    if _terminal_resized:
-        _terminal_resized = False
-        return True
-    return False
-
-
-# ─── Terminal dimension helpers (from A — 3-tier adaptive layout) ─────────────
-
-def _get_term_size() -> tuple[int, int]:
-    try:
-        c = Console()
-        return c.size.width, c.size.height
-    except Exception:
-        return 80, 24
-
-def _is_compact(height: int) -> bool:
-    return height < 40
-
-def _is_narrow(width: int) -> bool:
-    return width < 100
-
-def _is_tiny(width: int, height: int) -> bool:
-    return width < 80 or height < 24
-
-
-# ─── Gradient helpers (from B — green→yellow→red bar charts) ─────────────────
-
-def _clamp01(x: float) -> float:
-    return 0.0 if x < 0 else 1.0 if x > 1 else x
-
-def _rgb(r: int, g: int, b: int) -> str:
-    return f"rgb({r},{g},{b})"
-
-def _lerp(a: int, b: int, t: float) -> int:
-    return int(round(a + (b - a) * t))
-
-def _heat_rgb(t: float) -> tuple[int, int, int]:
-    """Green → Yellow → Red heat scale for t in [0,1]."""
-    t = _clamp01(t)
-    if t <= 0.5:
-        u = t / 0.5
-        return (_lerp(0, 255, u), 255, 0)
-    u = (t - 0.5) / 0.5
-    return (255, _lerp(255, 40, u), 0)
-
-
-# ─── Contextual number styling (from E) ──────────────────────────────────────
-
-def style_number(value: int, context: str = "default") -> Text:
-    """0=dim, low=cyan, medium=yellow, high=green, extreme=red."""
-    if value == 0:
-        return Text(str(value), style="dim grey50")
-    thresholds = {
-        "sessions": (5, 20, 50, 100),
-        "agents":   (10, 50, 100, 200),
-        "turns":    (50, 200, 500, 1000),
-        "procs":    (1, 3, 5, 10),
-        "default":  (5, 20, 50, 100),
-    }
-    low, med, high, extreme = thresholds.get(context, thresholds["default"])
-    if value >= extreme:
-        return Text(str(value), style=f"bold {C_NEON_RED}")
-    elif value >= high:
-        return Text(str(value), style=f"bold {C_NEON_GREEN}")
-    elif value >= med:
-        return Text(str(value), style=C_WARN)
-    elif value >= low:
-        return Text(str(value), style=C_NEON_CYAN)
-    else:
-        return Text(str(value), style=f"dim {C_NEON_CYAN}")
-
-
-# ─── Last scan delta (from E) ────────────────────────────────────────────────
-
-def format_time_delta(collected_at: str) -> str:
-    try:
-        collected = datetime.datetime.fromisoformat(collected_at)
-        delta = (datetime.datetime.now() - collected).total_seconds()
-        if delta < 60:
-            return f"{int(delta)}s ago"
-        elif delta < 3600:
-            return f"{int(delta // 60)}m ago"
-        return f"{int(delta // 3600)}h ago"
-    except Exception:
-        return "just now"
-
-
-# ─── Bar chart helpers ────────────────────────────────────────────────────────
-
-def spark(values: list[int], width: int = 12) -> str:
-    """Sparkline from a list of integers."""
-    if not values or max(values) == 0:
-        return "·" * width
-    mx = max(values)
-    tail = values[-width:]
-    padded = [0] * (width - len(tail)) + tail
-    scaled = [int(v / mx * 8) for v in padded]
-    return "".join(SPARK_CHARS[s] for s in scaled)
-
-
-def spark_with_trend(values: list[int], width: int = 12) -> tuple[str, str]:
-    """Sparkline + trend arrow ↑↓→ (from A)."""
-    sp = spark(values, width)
-    if len(values) < 2:
-        return sp, "→"
-    recent = values[-3:] if len(values) >= 3 else values
-    older = values[-6:-3] if len(values) >= 6 else values[:len(values)//2] or [0]
-    avg_recent = sum(recent) / len(recent)
-    avg_older = sum(older) / len(older) if older else 0
-    if avg_recent > avg_older * 1.2:
-        return sp, "↑"
-    elif avg_recent < avg_older * 0.8:
-        return sp, "↓"
-    return sp, "→"
-
-
-def bar_chart_gradient(value: int, maximum: int, width: int = 20) -> Text:
-    """Gradient-filled bar chart green→yellow→red (from B)."""
-    maximum = max(maximum, 1)
-    filled = max(0, min(width, int((value / maximum) * width)))
-    t = Text()
-    for i in range(width):
-        if i < filled:
-            heat_t = 0.0 if width <= 1 else i / (width - 1)
-            r, g, b = _heat_rgb(heat_t)
-            t.append("█", style=_rgb(r, g, b))
-        else:
-            t.append("░", style="#303050")
-    t.append(f"  {value}", style=C_LABEL)
-    return t
-
-
-def bar_chart(value: int, maximum: int, width: int = 20, color: str = C_ACCENT) -> Text:
-    """Simple colored bar chart."""
-    if maximum == 0:
-        filled = 0
-    else:
-        filled = max(0, min(width, int(value / maximum * width)))
-    bar = "█" * filled + "░" * (width - filled)
-    t = Text()
-    t.append(bar, style=color)
-    t.append(f"  {value}", style=C_LABEL)
-    return t
-
-
-def gradient_share_bar(pct: float, width: int = 20) -> Text:
-    """Gradient share bar for agent breakdown (from B)."""
-    pct = _clamp01(pct)
-    filled = int(pct * width)
-    t = Text()
-    for i in range(width):
-        if i < filled:
-            heat_t = 0.0 if width <= 1 else i / (width - 1)
-            r, g, b = _heat_rgb(heat_t)
-            t.append("█", style=_rgb(r, g, b))
-        else:
-            t.append("░", style="#303050")
-    return t
-
-
-def pulse_wave(offset: int = 0, width: int = 40) -> str:
-    """Scrolling sine wave animation (from C)."""
-    wave = ""
-    for i in range(width):
-        idx = (i + offset) % len(PULSE_WAVE_CHARS)
-        wave += PULSE_WAVE_CHARS[idx]
-    return wave
-
-
-def activity_heatmap(hourly_counts: list[int]) -> Text:
-    """24-hour activity heatmap ░▒▓█ (from D)."""
-    text = Text()
-    if not hourly_counts:
-        text.append(" " * 24, style=C_MUTED)
-        return text
-    mx = max(hourly_counts) or 1
-    for v in hourly_counts[-24:]:
-        if v <= 0:
-            ch = " "
-            style = C_MUTED
-        else:
-            level = max(1, min(len(HEATMAP_BLOCKS) - 1, int(v / mx * (len(HEATMAP_BLOCKS) - 1)) or 1))
-            ch = HEATMAP_BLOCKS[level]
-            style = C_NEON_PINK if level >= len(HEATMAP_BLOCKS) - 2 else C_NEON_CYAN
-        text.append(ch, style=style)
-    return text
-
-
-def make_stacked_bar(agents: dict[str, int], width: int = 40) -> Text:
-    """Horizontal stacked bar for agent type distribution (from E)."""
-    total = sum(agents.values())
-    if total == 0:
-        return Text("░" * width, style="dim grey50")
-    bar = Text()
-    remaining_width = width
-    sorted_agents = sorted(agents.items(), key=lambda x: -x[1])
-    for i, (name, count) in enumerate(sorted_agents):
-        if remaining_width <= 0:
-            break
-        color, icon = AGENT_COLORS.get(name, DEFAULT_AGENT_COLOR)
-        segment_width = max(1, int(count / total * width))
-        if i == len(sorted_agents) - 1:
-            segment_width = remaining_width
-        segment_width = min(segment_width, remaining_width)
-        bar.append("█" * segment_width, style=color.replace("bold ", ""))
-        remaining_width -= segment_width
-    return bar
-
-
-def format_uptime(start: datetime.datetime) -> str:
-    """Dashboard uptime as compact string (from A)."""
-    delta = datetime.datetime.now() - start
-    total_secs = int(delta.total_seconds())
-    if total_secs < 60:
-        return f"{total_secs}s"
-    mins = total_secs // 60
-    secs = total_secs % 60
-    if mins < 60:
-        return f"{mins}m{secs:02d}s"
-    hrs = mins // 60
-    mins = mins % 60
-    return f"{hrs}h{mins:02d}m"
-
-
-def activity_status_dot(stats: dict) -> str:
-    active_sessions = len(stats.get("active_sessions", []))
-    active_procs = len(stats.get("active_procs", []))
-    if active_sessions > 0 or active_procs > 0:
-        return "🟢"
-    elif stats.get("today_sessions", 0) > 0:
-        return "🟡"
-    return "🔴"
-
-
-def _is_active(stats: dict) -> bool:
-    """True if agents are active (from B)."""
-    return bool(stats.get("active_sessions") or stats.get("active_procs"))
-
-
-def _border_style(stats: dict) -> str:
-    """Dynamic border: green when active, cyan when idle (from B)."""
-    return f"bold {C_NEON_GREEN}" if _is_active(stats) else C_NEON_CYAN
-
-
-# ─── Data Collection ──────────────────────────────────────────────────────────
-
-def get_active_copilot_procs() -> list[dict]:
-    try:
-        result = subprocess.run(["ps", "aux"], capture_output=True, text=True, timeout=5)
-        procs = []
-        for line in result.stdout.splitlines():
-            if "copilot-cli" in line.lower() or ("/copilot" in line and "grep" not in line):
-                parts = line.split(None, 10)
-                if len(parts) >= 2:
-                    try:
-                        pid = int(parts[1])
-                    except ValueError:
-                        continue
-                    cpu = parts[2] if len(parts) > 2 else "?"
-                    mem = parts[3] if len(parts) > 3 else "?"
-                    cmd = parts[-1][:60] if len(parts) > 10 else ""
-                    procs.append({"pid": pid, "cpu": cpu, "mem": mem, "cmd": cmd})
-        return procs
-    except Exception:
-        return []
-
-
-def get_active_sessions() -> list[dict]:
-    active = []
-    if not SESSION_STATE.exists():
-        return active
-    for sess_dir in SESSION_STATE.iterdir():
-        if not sess_dir.is_dir():
-            continue
-        locks = list(sess_dir.glob("inuse.*.lock"))
-        if locks:
-            lock = locks[0]
-            pid_str = lock.stem.split(".")[-1]
-            try:
-                pid = int(pid_str)
-            except ValueError:
-                pid = None
-            summary = _get_session_summary(sess_dir)
-            mtime = datetime.datetime.fromtimestamp(sess_dir.stat().st_mtime)
-            active.append({
-                "id": sess_dir.name[:8],
-                "full_id": sess_dir.name,
-                "pid": pid,
-                "summary": summary,
-                "mtime": mtime,
-            })
-    return sorted(active, key=lambda x: x["mtime"], reverse=True)
-
-
-ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-
-def _strip_ansi(text: str) -> str:
-    return ANSI_ESCAPE.sub("", text)
-
-
-def _get_session_summary(sess_dir: Path) -> str:
-    ws = sess_dir / "workspace.yaml"
-    if ws.exists():
-        try:
-            content = ws.read_text()
-            for line in content.splitlines():
-                if "summary" in line.lower() or "title" in line.lower():
-                    val = line.split(":", 1)[-1].strip().strip('"').strip("'")
-                    if val:
-                        return val[:60]
-        except Exception:
-            pass
-    events_file = sess_dir / "events.jsonl"
-    if events_file.exists():
-        try:
-            with open(events_file) as f:
-                for line in f:
-                    e = json.loads(line)
-                    if e.get("type") == "user.message":
-                        msg = _strip_ansi(e.get("data", {}).get("content", ""))[:60]
-                        if msg:
-                            return msg
-        except Exception:
-            pass
-    return "Active session"
-
-
-def get_recent_agents(hours: int = 24) -> dict[str, int]:
-    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
-    counts: dict[str, int] = defaultdict(int)
-    if not SESSION_STATE.exists():
-        return counts
-    for sess_dir in SESSION_STATE.iterdir():
-        if not sess_dir.is_dir():
-            continue
-        ef = sess_dir / "events.jsonl"
-        if not ef.exists():
-            continue
-        try:
-            mtime = datetime.datetime.fromtimestamp(ef.stat().st_mtime, tz=datetime.timezone.utc)
-            if mtime < since - datetime.timedelta(hours=1):
-                continue
-            with open(ef) as f:
-                for line in f:
-                    try:
-                        ev = json.loads(line)
-                        if ev.get("type") != "subagent.started":
-                            continue
-                        ts_str = ev.get("timestamp", "")
-                        if ts_str:
-                            ts = datetime.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                            if ts < since:
-                                continue
-                        name = ev.get("data", {}).get("agentName", "unknown")
-                        counts[name] += 1
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-    return dict(counts)
-
-
-def get_skill_invocations(hours: int = 24) -> dict[str, int]:
-    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
-    counts: dict[str, int] = defaultdict(int)
-    if not SESSION_STATE.exists():
-        return counts
-    for sess_dir in SESSION_STATE.iterdir():
-        if not sess_dir.is_dir():
-            continue
-        ef = sess_dir / "events.jsonl"
-        if not ef.exists():
-            continue
-        try:
-            mtime = datetime.datetime.fromtimestamp(ef.stat().st_mtime, tz=datetime.timezone.utc)
-            if mtime < since - datetime.timedelta(hours=1):
-                continue
-            with open(ef) as f:
-                for line in f:
-                    try:
-                        ev = json.loads(line)
-                        if ev.get("type") != "skill.invoked":
-                            continue
-                        name = ev.get("data", {}).get("skillName", "unknown")
-                        counts[name] += 1
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-    return dict(counts)
-
-
-def get_db_stats() -> dict[str, Any]:
-    """Query session-store.db with sqlite3.OperationalError handling (from E)."""
-    stats = {
-        "total_sessions": 0, "total_turns": 0,
-        "today_sessions": 0, "today_turns": 0,
-        "week_sessions": 0, "month_sessions": 0,
-        "daily_sessions": [], "recent_sessions": [],
-        "peak_concurrent": 0,
-        "hourly_sessions_24h": [],
-        "db_locked": False,
-    }
-    if not SESSION_DB.exists():
-        return stats
-    try:
-        conn = sqlite3.connect(str(SESSION_DB), timeout=5)
-        conn.row_factory = sqlite3.Row
-        now = datetime.datetime.now(datetime.timezone.utc)
-        today = now.strftime("%Y-%m-%d")
-        week_ago = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
-        month_ago = (now - datetime.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
-
-        stats["total_sessions"] = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-        stats["total_turns"] = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
-        stats["today_sessions"] = conn.execute(
-            "SELECT COUNT(*) FROM sessions WHERE created_at LIKE ?", (f"{today}%",)
-        ).fetchone()[0]
-        stats["today_turns"] = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE timestamp LIKE ?", (f"{today}%",)
-        ).fetchone()[0]
-        stats["week_sessions"] = conn.execute(
-            "SELECT COUNT(*) FROM sessions WHERE created_at >= ?", (week_ago,)
-        ).fetchone()[0]
-        stats["month_sessions"] = conn.execute(
-            "SELECT COUNT(*) FROM sessions WHERE created_at >= ?", (month_ago,)
-        ).fetchone()[0]
-
-        # Daily breakdown — last 14 days
-        daily = []
-        for i in range(13, -1, -1):
-            d = (now - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
-            c = conn.execute(
-                "SELECT COUNT(*) FROM sessions WHERE created_at LIKE ?", (f"{d}%",)
-            ).fetchone()[0]
-            daily.append({"date": d, "count": c})
-        stats["daily_sessions"] = daily
-
-        # Peak concurrent estimate (from A)
-        try:
-            rows = conn.execute(
-                "SELECT substr(created_at, 1, 13) AS hour_bucket, COUNT(*) AS cnt "
-                "FROM sessions WHERE created_at LIKE ? GROUP BY hour_bucket ORDER BY cnt DESC LIMIT 1",
-                (f"{today}%",)
-            ).fetchone()
-            if rows:
-                stats["peak_concurrent"] = rows[1]
-        except Exception:
-            pass
-
-        # Hourly activity for last 24h — for heatmap (from D)
-        try:
-            cutoff_24h = (now - datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
-            rows = conn.execute(
-                "SELECT substr(created_at, 1, 13) AS hour, COUNT(*) AS c "
-                "FROM sessions WHERE created_at >= ? GROUP BY hour",
-                (cutoff_24h,),
-            ).fetchall()
-            by_hour = {r["hour"]: r["c"] for r in rows}
-            hours_24: list[dict[str, Any]] = []
-            for i in range(23, -1, -1):
-                h = (now - datetime.timedelta(hours=i)).strftime("%Y-%m-%dT%H")
-                hours_24.append({"hour": h, "count": by_hour.get(h, 0)})
-            stats["hourly_sessions_24h"] = hours_24
-        except Exception:
-            pass
-
-        # Recent sessions
-        rows = conn.execute(
-            "SELECT id, summary, created_at, cwd FROM sessions "
-            "ORDER BY created_at DESC LIMIT 10"
-        ).fetchall()
-        stats["recent_sessions"] = [dict(r) for r in rows]
-        conn.close()
-
-    except sqlite3.OperationalError as e:
-        if "locked" in str(e).lower():
-            stats["db_locked"] = True
-        stats["error"] = str(e)
-    except Exception as e:
-        stats["error"] = str(e)
-    return stats
-
-
-def count_all_subagents() -> int:
-    total = 0
-    if not SESSION_STATE.exists():
-        return total
-    for sess_dir in SESSION_STATE.iterdir():
-        if not sess_dir.is_dir():
-            continue
-        ef = sess_dir / "events.jsonl"
-        if not ef.exists():
-            continue
-        try:
-            with open(ef) as f:
-                for line in f:
-                    try:
-                        ev = json.loads(line)
-                        if ev.get("type") == "subagent.started":
-                            total += 1
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-    return total
-
-
-def get_last_agent_launched() -> str | None:
-    latest_ts: str | None = None
-    if not SESSION_STATE.exists():
-        return None
-    # Sort session dirs by modification time (newest first) and limit scan
-    try:
-        sess_dirs = sorted(
-            (d for d in SESSION_STATE.iterdir() if d.is_dir()),
-            key=lambda d: d.stat().st_mtime,
-            reverse=True,
-        )
-    except Exception:
-        return None
-    for sess_dir in sess_dirs[:20]:  # Only check 20 most recent sessions
-        ef = sess_dir / "events.jsonl"
-        if not ef.exists():
-            continue
-        try:
-            # Read file in reverse to find latest event faster
-            lines = ef.read_text().splitlines()
-            for line in reversed(lines):
-                try:
-                    ev = json.loads(line)
-                    if ev.get("type") == "subagent.started":
-                        ts = ev.get("timestamp", "")
-                        if ts and (latest_ts is None or ts > latest_ts):
-                            latest_ts = ts
-                        break  # Found latest in this file, move on
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        if latest_ts:
-            break  # Found one — most recent session wins
-    return latest_ts
-
-
-def get_installed_agents() -> list[str]:
-    if not AGENTS_DIR.exists():
-        return []
-    return [
-        p.name.replace(".agent.md", "")
-        for p in sorted(AGENTS_DIR.glob("*.agent.md"))
-    ]
-
-
-def collect_all_stats() -> dict[str, Any]:
-    """Master data collection — merges features from A/D/E."""
-    global _peak_concurrent_sessions, _peak_concurrent_procs, _last_agent_launched_ts
-
-    try:
-        db = get_db_stats()
-    except sqlite3.OperationalError:
-        db = {"total_sessions": 0, "total_turns": 0, "today_sessions": 0,
-              "today_turns": 0, "week_sessions": 0, "month_sessions": 0,
-              "daily_sessions": [], "recent_sessions": [], "peak_concurrent": 0,
-              "hourly_sessions_24h": [], "db_locked": True, "error": "DB locked"}
-
-    procs  = get_active_copilot_procs()
-    active = get_active_sessions()
-    agents = get_recent_agents(24)
-    skills = get_skill_invocations(24)
-    inst   = get_installed_agents()
-
-    total_agents_24h = sum(agents.values())
-
-    # Peak concurrent (from A)
-    current_sessions = len(active)
-    current_procs = len(procs)
-    _peak_concurrent_sessions = max(_peak_concurrent_sessions, current_sessions)
-    _peak_concurrent_procs = max(_peak_concurrent_procs, current_procs)
-
-    # Last agent launched (from A)
-    last_agent_ts = get_last_agent_launched()
-    if last_agent_ts:
-        _last_agent_launched_ts = last_agent_ts
-
-    # Agent velocity (from D)
-    agent_velocity = total_agents_24h / 24.0 if total_agents_24h else 0.0
-
-    # History persistence
-    history = _load_history()
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
-    history.setdefault(today, {"sessions": 0, "agents": 0, "turns": 0})
-    history[today]["sessions"] = db["today_sessions"]
-    history[today]["agents"] = total_agents_24h
-    history[today]["turns"] = db["today_turns"]
-    _save_history(history)
-
-    now = datetime.datetime.now()
-    days_14 = [(now - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
-    daily_agents = [history.get(d, {}).get("agents", 0) for d in days_14]
-
-    return {
-        "collected_at":              datetime.datetime.now().isoformat(timespec="seconds"),
-        "active_procs":              procs,
-        "active_sessions":           active,
-        "total_sessions":            db["total_sessions"],
-        "total_turns":               db["total_turns"],
-        "today_sessions":            db["today_sessions"],
-        "today_turns":               db["today_turns"],
-        "week_sessions":             db["week_sessions"],
-        "month_sessions":            db["month_sessions"],
-        "daily_sessions":            db.get("daily_sessions", []),
-        "daily_agents":              [{"date": d, "count": c} for d, c in zip(days_14, daily_agents)],
-        "agents_24h":                agents,
-        "skills_24h":                skills,
-        "installed_agents":          inst,
-        "total_subagents_24h":       total_agents_24h,
-        "history":                   history,
-        "peak_concurrent_sessions":  _peak_concurrent_sessions,
-        "peak_concurrent_procs":     _peak_concurrent_procs,
-        "peak_concurrent_hour":      db.get("peak_concurrent", 0),
-        "last_agent_launched":       _last_agent_launched_ts,
-        "dashboard_uptime":          format_uptime(_DASHBOARD_START),
-        "agent_velocity_per_hour":   agent_velocity,
-        "hourly_sessions_24h":       db.get("hourly_sessions_24h", []),
-        "db_locked":                 db.get("db_locked", False),
-    }
-
-
-# ─── History persistence ──────────────────────────────────────────────────────
-
-def _load_history() -> dict:
-    if HISTORY_FILE.exists():
-        try:
-            return json.loads(HISTORY_FILE.read_text())
-        except Exception:
-            pass
-    return {}
-
-def _save_history(data: dict) -> None:
-    try:
-        HISTORY_FILE.write_text(json.dumps(data, indent=2))
-    except Exception:
-        pass
-
-
-# ─── Rich rendering helpers ──────────────────────────────────────────────────
-
-def _agent_badge(name: str) -> Text:
-    color, icon = AGENT_COLORS.get(name, DEFAULT_AGENT_COLOR)
-    t = Text()
-    t.append(f" {icon} {name} ", style=f"{color} on grey15")
-    return t
-
-
-# ─── Panel builders — ALL wrapped in try/except (from E) ─────────────────────
-
-def make_banner(tick: int = 0, stats: dict | None = None, force_compact: bool = False) -> Panel:
-    """Banner with C's Unicode art, A's heartbeat, C's pulse wave, B's dynamic border."""
-    try:
-        term_w, term_h = _get_term_size()
-        status_dot = activity_status_dot(stats) if stats else "🟡"
-        heartbeat = HEARTBEAT_FRAMES[tick % len(HEARTBEAT_FRAMES)]
-        uptime = stats.get("dashboard_uptime", "0s") if stats else "0s"
-        now_str = datetime.datetime.now().strftime("%H:%M:%S")
-        date_str = datetime.datetime.now().strftime("%a %d %b %Y")
-        active = _is_active(stats) if stats else False
-        border = f"bold {C_NEON_GREEN}" if active else f"bold {C_NEON_CYAN}"
-
-        if force_compact or _is_compact(term_h) or _is_narrow(term_w):
-            wave = pulse_wave(offset=tick, width=20)
-            line = Text(justify="center")
-            line.append(f" {heartbeat} ", style=f"bold {C_NEON_PINK}")
-            line.append("Agent Pulse", style=f"bold {C_NEON_CYAN}")
-            line.append(f"  {status_dot} ", style="white")
-            line.append(f"  {date_str}  {now_str}", style=f"dim {C_NEON_CYAN}")
-            line.append(f"  ⏱ {uptime}", style=C_DIM)
-            wave_text = Text(wave, style=C_NEON_CYAN, justify="center")
-            content = Text.assemble(line, "\n", wave_text)
-            return Panel(Align.center(content), border_style=border, box=box.HEAVY, padding=(0, 1))
-
-        # Full banner with original ASCII art
-        banner_text = Text(BANNER_ART, style="bold white", justify="center")
-        subtitle_text = Text(BANNER_SUBTITLE, style=f"bold {C_NEON_CYAN}", justify="center")
-        wave = pulse_wave(offset=tick, width=50)
-        wave_text = Text(wave, style=C_NEON_CYAN, justify="center")
-
-        title_line = Text(justify="center")
-        title_line.append(f" {heartbeat} ", style=f"bold {C_NEON_PINK}")
-        title_line.append("powered by GitHub Copilot CLI", style=f"dim {C_NEON_CYAN}")
-
-        info_line = Text(justify="center")
-        info_line.append(f" {status_dot} ", style="white")
-        info_line.append("LIVE", style=f"bold {C_NEON_GREEN}")
-        info_line.append(f"  ·  {date_str}  {now_str}", style=f"dim {C_NEON_CYAN}")
-        info_line.append(f"  ·  ⏱ uptime {uptime}", style=C_DIM)
-
-        content = Group(
-            Align.center(banner_text),
-            Align.center(subtitle_text),
-            Text(),
-            Align.center(wave_text),
-            Align.center(title_line),
-            Align.center(info_line),
-        )
-        return Panel(content, border_style=border, box=box.HEAVY, padding=(0, 2))
-    except Exception:
-        return Panel(Text("⚡ Agent Pulse", style=f"bold {C_NEON_CYAN}"), border_style=C_NEON_CYAN, box=box.HEAVY)
-
-
-def make_live_stats(stats: dict, tick: int = 0) -> Panel:
-    """Key metrics with contextual coloring, peak concurrent, velocity, heatmap."""
-    try:
-        term_w, term_h = _get_term_size()
-        narrow = _is_narrow(term_w)
-        compact = _is_compact(term_h)
-        border = _border_style(stats)
-        last_scan = format_time_delta(stats["collected_at"])
-
-        t = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-        t.add_column("Label", style=C_MUTED, min_width=18)
-        t.add_column("Value", style=C_LABEL, justify="right", min_width=6)
-        if not narrow:
-            t.add_column("Chart", min_width=16)
-
-        procs = stats["active_procs"]
-        sessions = stats["active_sessions"]
-
-        def row(label, value, chart_val=0, mx=1, ctx="default"):
-            styled_val = style_number(value, ctx)
-            if narrow:
-                t.add_row(label, styled_val)
-            else:
-                t.add_row(label, styled_val, bar_chart_gradient(chart_val, mx, width=14))
-
-        # Header
-        if narrow:
-            t.add_row(Text("◉ Sessions", style=C_HEADER), style_number(len(sessions), "sessions"))
-            t.add_row(Text("◉ Processes", style=C_HEADER), style_number(len(procs), "procs"))
-            t.add_row(Text("◉ Agents 24h", style=C_HEADER), style_number(stats["total_subagents_24h"], "agents"))
-        else:
-            t.add_row(Text("◉ Sessions", style=C_HEADER), style_number(len(sessions), "sessions"), Text(f"scanned {last_scan}", style="dim grey50"))
-            t.add_row(Text("◉ Processes", style=C_HEADER), style_number(len(procs), "procs"), Text(""))
-            t.add_row(Text("◉ Agents 24h", style=C_HEADER), style_number(stats["total_subagents_24h"], "agents"), Text(""))
-
-        if not compact:
-            if narrow:
-                t.add_row("", "")
-            else:
-                t.add_row("", "", Text(""))
-            row("  Today", stats["today_sessions"], stats["today_sessions"], max(stats["week_sessions"] // 7, 1), "sessions")
-            row("  This Week", stats["week_sessions"], stats["week_sessions"], stats["month_sessions"] or 1, "sessions")
-            row("  This Month", stats["month_sessions"], stats["month_sessions"], stats["total_sessions"] or 1, "sessions")
-            row("  All-time", stats["total_sessions"], stats["total_sessions"], stats["total_sessions"] or 1, "sessions")
-
-        # Extra metrics separator
-        if narrow:
-            t.add_row("", "")
-        else:
-            t.add_row("", "", Text(""))
-
-        # Peak concurrent (from A)
-        peak_sess = stats.get("peak_concurrent_sessions", 0)
-        peak_hour = stats.get("peak_concurrent_hour", 0)
-        peak_val = max(peak_sess, peak_hour)
-        if narrow:
-            t.add_row(Text("⚡ Peak concurrent", style=C_WARN), style_number(peak_val, "sessions"))
-        else:
-            t.add_row(Text("⚡ Peak concurrent", style=C_WARN), style_number(peak_val, "sessions"), Text(""))
-
-        # Agent velocity (from D)
-        velocity = stats.get("agent_velocity_per_hour", 0.0)
-        vel_text = Text(f"{velocity:.1f}/h", style=C_NEON_CYAN)
-        if narrow:
-            t.add_row(Text("🚀 Agent velocity", style=C_NEON_CYAN), vel_text)
-        else:
-            t.add_row(Text("🚀 Agent velocity", style=C_NEON_CYAN), vel_text, Text(""))
-
-        # Last agent launched (from A/E)
-        last_agent = stats.get("last_agent_launched")
-        if last_agent:
-            try:
-                ts = datetime.datetime.fromisoformat(last_agent.replace("Z", "+00:00"))
-                age = datetime.datetime.now(datetime.timezone.utc) - ts
-                if age.total_seconds() < 60:
-                    ago = f"{int(age.total_seconds())}s ago"
-                elif age.total_seconds() < 3600:
-                    ago = f"{int(age.total_seconds() // 60)}m ago"
-                else:
-                    ago = f"{int(age.total_seconds() // 3600)}h ago"
-                agent_ts_text = Text(ago, style=C_NEON_CYAN)
-            except Exception:
-                agent_ts_text = Text(last_agent[:19], style=C_MUTED)
-        else:
-            agent_ts_text = Text("—", style=C_MUTED)
-
-        if narrow:
-            t.add_row(Text("🕐 Last agent", style=C_NEON_CYAN), agent_ts_text)
-        else:
-            t.add_row(Text("🕐 Last agent", style=C_NEON_CYAN), agent_ts_text, Text(""))
-
-        # 24-hour activity heatmap (from D) — only if not narrow
-        if not narrow and not compact:
-            hourly = stats.get("hourly_sessions_24h") or []
-            counts = [h["count"] for h in hourly]
-            if counts:
-                t.add_row(Text("📊 24h heatmap", style=C_NEON_PINK), Text(""), activity_heatmap(counts))
-
-        # DB lock warning (from C/E)
-        if stats.get("db_locked"):
-            warning = Text("  ⚠ DB locked — some stats unavailable", style=C_WARN)
-            body = Group(t, warning)
-        else:
-            body = t
-
-        return Panel(body, title=f"[bold {C_NEON_CYAN}]● LIVE METRICS[/]", border_style=border, box=box.ROUNDED)
-    except Exception as e:
-        return Panel(Text(f"Error building stats: {e}", style=C_NEON_RED), title=f"[bold {C_NEON_RED}]● ERROR[/]", border_style=C_NEON_RED, box=box.ROUNDED)
-
-
-def make_active_sessions(stats: dict, tick: int = 0) -> Panel:
-    """Active sessions panel with try/except safety."""
-    try:
-        term_w, term_h = _get_term_size()
-        compact = _is_compact(term_h)
-        sessions = stats["active_sessions"]
-        border = _border_style(stats)
-
-        t = Table(box=box.SIMPLE_HEAD, expand=True, show_lines=False)
-        t.add_column("PID", style=C_MUTED, width=7)
-        t.add_column("Session", style=C_NEON_CYAN, width=10)
-        t.add_column("Summary", style="white", ratio=1)
-        t.add_column("Since", style=C_MUTED, width=6)
-
-        max_rows = 4 if compact else 8
-        if not sessions:
-            t.add_row(Text("—", style=C_MUTED), Text("no active sessions", style=C_MUTED), "", "")
-        else:
-            for s in sessions[:max_rows]:
-                since = s["mtime"].strftime("%H:%M")
-                summary_max = 40 if _is_narrow(term_w) else 55
-                t.add_row(str(s["pid"] or "?"), s["id"], s["summary"][:summary_max], since)
-
-        procs = stats["active_procs"]
-        proc_text = Text()
-        if procs:
-            for p in procs[:3 if compact else 4]:
-                proc_text.append(f"  PID {p['pid']}  CPU {p['cpu']}%  MEM {p['mem']}%\n", style=C_MUTED)
-        else:
-            proc_text.append("  no copilot processes found", style=C_MUTED)
-
-        body = Group(t, Rule(style="#303050"), proc_text)
-        return Panel(body, title=f"[bold {C_NEON_GREEN}]⚡ ACTIVE[/]", border_style=border, box=box.ROUNDED)
-    except Exception as e:
-        return Panel(Text(f"Error: {e}", style=C_NEON_RED), title=f"[bold {C_NEON_RED}]⚡ ERROR[/]", border_style=C_NEON_RED, box=box.ROUNDED)
-
-
-def make_agent_breakdown(stats: dict, tick: int = 0) -> Panel:
-    """Agent breakdown with stacked bar (from E) and gradient shares (from B)."""
-    try:
-        term_w, term_h = _get_term_size()
-        compact = _is_compact(term_h)
-        narrow = _is_narrow(term_w)
-        agents = stats["agents_24h"]
-        total = stats["total_subagents_24h"]
-        border = _border_style(stats)
-
-        # Stacked bar (from E)
-        stacked = make_stacked_bar(agents, width=40 if not narrow else 24)
-        bar_line = Text()
-        bar_line.append("  Distribution: ", style=C_MUTED)
-        bar_line.append_text(stacked)
-
-        t = Table(box=box.SIMPLE_HEAD, expand=True)
-        t.add_column("Agent Type", style="white", ratio=1)
-        t.add_column("Count", style=C_LABEL, width=5, justify="right")
-        if not narrow:
-            t.add_column("Share", width=18)
-
-        max_rows = 5 if compact else 10
-        if not agents:
-            if narrow:
-                t.add_row(Text("No agents (24h)", style=C_MUTED), "")
-            else:
-                t.add_row(Text("No agents launched in last 24h", style=C_MUTED), "", "")
-        else:
-            for name, count in sorted(agents.items(), key=lambda x: -x[1])[:max_rows]:
-                color, icon = AGENT_COLORS.get(name, DEFAULT_AGENT_COLOR)
-                badge = Text()
-                badge.append(f"{icon} {name}", style=color)
-                pct = count / total if total else 0
-                if narrow:
-                    t.add_row(badge, style_number(count, "agents"))
-                else:
-                    t.add_row(badge, style_number(count, "agents"), gradient_share_bar(pct, width=16))
-
-        # Skills
-        skills = stats["skills_24h"]
-        skill_text = Text()
-        if skills:
-            skill_text.append("  Skills: ", style=C_MUTED)
-            for sname, cnt in sorted(skills.items(), key=lambda x: -x[1])[:4 if compact else 6]:
-                skill_text.append(f" {sname}×{cnt}", style=C_NEON_CYAN)
-        else:
-            skill_text.append("  No skills (24h)", style=C_MUTED)
-
-        body = Group(bar_line, Text(""), t, skill_text)
-        return Panel(body, title=f"[bold {C_WARN}]⚙ AGENTS (24h) · {total}[/]", border_style=border, box=box.ROUNDED)
-    except Exception as e:
-        return Panel(Text(f"Error: {e}", style=C_NEON_RED), title=f"[bold {C_NEON_RED}]⚙ ERROR[/]", border_style=C_NEON_RED, box=box.ROUNDED)
-
-
-def make_trends(stats: dict, tick: int = 0) -> Panel:
-    """7-day trend with sparklines and trend arrows (from A)."""
-    try:
-        term_w, term_h = _get_term_size()
-        compact = _is_compact(term_h)
-        narrow = _is_narrow(term_w)
-        border = _border_style(stats)
-
-        daily_s = stats.get("daily_sessions", [])
-        daily_a = stats.get("daily_agents", [])
-        if not daily_s:
-            daily_s = [{"date": datetime.datetime.now().strftime("%Y-%m-%d"), "count": 0}]
-        if not daily_a:
-            daily_a = [{"date": datetime.datetime.now().strftime("%Y-%m-%d"), "count": 0}]
-
-        sess_vals = [d["count"] for d in daily_s]
-        agent_vals = [d["count"] for d in daily_a]
-        max_sess = max(sess_vals + [1])
-        max_agent = max(agent_vals + [1])
-
-        t = Table(box=None, show_header=True, padding=(0, 1), expand=True)
-        t.add_column("Date", style=C_MUTED, width=12)
-        t.add_column("Sess", style="white", width=5, justify="right")
-        if not narrow:
-            t.add_column("▾", min_width=16)
-        t.add_column("Agnt", style="white", width=5, justify="right")
-        if not narrow:
-            t.add_column("▾", min_width=16)
-
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
-        num_days = 5 if compact else 7
-
-        for ds, da in zip(daily_s[-num_days:], daily_a[-num_days:]):
-            is_today = ds["date"] == today
-            date_style = f"bold {C_NEON_CYAN}" if is_today else C_MUTED
-            suffix = " ◀" if is_today else ""
-            if narrow:
-                t.add_row(
-                    Text(ds["date"][5:] + suffix, style=date_style),
-                    style_number(ds["count"], "sessions"),
-                    style_number(da["count"], "agents"),
-                )
-            else:
-                t.add_row(
-                    Text(ds["date"][5:] + suffix, style=date_style),
-                    style_number(ds["count"], "sessions"),
-                    bar_chart_gradient(ds["count"], max_sess, width=12),
-                    style_number(da["count"], "agents"),
-                    bar_chart_gradient(da["count"], max_agent, width=12),
-                )
-
-        # Sparkline with trend arrows (from A)
-        if not narrow:
-            sp_s, trend_s = spark_with_trend(sess_vals, 14)
-            sp_a, trend_a = spark_with_trend(agent_vals, 14)
-            sparkline = Text()
-            sparkline.append(f"\n  sessions {trend_s} ", style=C_MUTED)
-            sparkline.append(sp_s, style=C_NEON_CYAN)
-            sparkline.append(f"  agents {trend_a} ", style=C_MUTED)
-            sparkline.append(sp_a, style=C_WARN)
-            body = Group(t, sparkline)
-        else:
-            body = Group(t)
-
-        return Panel(body, title=f"[bold {C_NEON_PINK}]📈 TREND[/]", border_style=border, box=box.ROUNDED)
-    except Exception as e:
-        return Panel(Text(f"Error: {e}", style=C_NEON_RED), title=f"[bold {C_NEON_RED}]📈 ERROR[/]", border_style=C_NEON_RED, box=box.ROUNDED)
-
-
-def make_installed_agents(stats: dict, tick: int = 0) -> Panel:
-    """Installed agents grid."""
-    try:
-        term_w, _ = _get_term_size()
-        agents = stats["installed_agents"]
-        cols = 2 if _is_narrow(term_w) else 3
-        border = _border_style(stats)
-
-        t = Table(box=None, show_header=False, padding=(0, 1), expand=True)
-        for _ in range(cols):
-            t.add_column(ratio=1)
-
-        row = []
-        for name in agents:
-            color, icon = AGENT_COLORS.get(name, DEFAULT_AGENT_COLOR)
-            badge = Text()
-            badge.append(f" {icon} {name}", style=color)
-            row.append(badge)
-            if len(row) == cols:
-                t.add_row(*row)
-                row = []
-        if row:
-            while len(row) < cols:
-                row.append("")
-            t.add_row(*row)
-
-        return Panel(t, title=f"[bold {C_NEON_CYAN}]🤖 AGENTS · {len(agents)}[/]", border_style=border, box=box.ROUNDED)
-    except Exception as e:
-        return Panel(Text(f"Error: {e}", style=C_NEON_RED), title=f"[bold {C_NEON_RED}]🤖 ERROR[/]", border_style=C_NEON_RED, box=box.ROUNDED)
-
-
-def make_micro_dashboard(stats: dict, tick: int) -> Panel:
-    """Micro dashboard fallback for very tiny terminals (from D)."""
-    try:
-        active = len(stats["active_sessions"])
-        agents_24h = stats["total_subagents_24h"]
-        velocity = stats.get("agent_velocity_per_hour", 0.0)
-        uptime = stats.get("dashboard_uptime", "")
-        heartbeat = HEARTBEAT_FRAMES[tick % len(HEARTBEAT_FRAMES)]
-
-        cards: list[Panel] = []
-        metrics = [
-            ("SESSIONS", str(active), C_NEON_GREEN if active else C_MUTED),
-            ("AGENTS 24H", str(agents_24h), C_NEON_PINK if agents_24h else C_MUTED),
-            ("VELOCITY", f"{velocity:.1f}/h", C_NEON_CYAN),
-        ]
-        for label, value, color in metrics:
-            body = Text(justify="center")
-            body.append(f"\n {value}\n", style=f"bold {color}")
-            body.append(f" {label}\n", style=C_DIM)
-            cards.append(Panel(Align.center(body), box=box.HEAVY, border_style=f"bold {color}", padding=(0, 2)))
-
-        header = Align.center(Text(f"{heartbeat} MICRO PULSE  ·  UPTIME {uptime}", style=f"bold {C_NEON_PINK}"))
-        group = Group(header, Columns(cards, expand=True, equal=True))
-        return Panel(group, box=box.ROUNDED, border_style=f"bold {C_NEON_CYAN}")
-    except Exception as e:
-        return Panel(Text(f"Micro error: {e}", style=C_NEON_RED), border_style=C_NEON_RED)
-
-
-def make_footer(tick: int = 0, refresh: int = 5) -> Text:
-    """Footer with heartbeat, countdown timer (from C), scan indicator."""
-    spinner_frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    spin = spinner_frames[tick % len(spinner_frames)]
-    heartbeat = HEARTBEAT_BRAILLE[tick % len(HEARTBEAT_BRAILLE)]
-    countdown = refresh - (tick % refresh) if refresh > 0 else 0
-    t = Text(justify="center")
-    t.append(f" {spin}{heartbeat} scanning  ", style=C_NEON_CYAN)
-    t.append(f"  next in {countdown}s  ", style=C_MUTED)
-    t.append("  Q quit  R refresh  H history  E export  ", style=C_MUTED)
-    return t
-
-
-# ─── Layout builder (RESPONSIVE — from A's 3-tier with D's micro) ────────────
-
-def build_live_layout(stats: dict, tick: int, refresh: int = 5, force_compact: bool = False) -> Layout:
-    """Build a responsive layout that adapts to terminal dimensions.
-
-    3 tiers from A: tiny → compact → full, plus D's micro dashboard.
-    All panel updates wrapped in try/except (from E).
-    """
-    term_w, term_h = _get_term_size()
-
-    # Force compact if CLI flag set
-    if force_compact:
-        compact = True
-        tiny = False
-    else:
-        compact = _is_compact(term_h)
-        tiny = _is_tiny(term_w, term_h)
-
-    layout = Layout()
-
-    # D's micro dashboard for very tiny terminals
-    if tiny and not force_compact:
-        layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="body", ratio=1),
-            Layout(name="footer", size=1),
-        )
-        try:
-            layout["header"].update(make_banner(tick, stats, force_compact=True))
-        except Exception:
-            layout["header"].update(Panel(Text("⚡ Agent Pulse", style=f"bold {C_NEON_CYAN}")))
-        try:
-            layout["body"].update(make_micro_dashboard(stats, tick))
-        except Exception:
-            layout["body"].update(make_live_stats(stats, tick))
-        layout["footer"].update(make_footer(tick, refresh))
-        return layout
-
-    if compact:
-        layout.split_column(
-            Layout(name="header", size=4),
-            Layout(name="top", ratio=2),
-            Layout(name="mid", ratio=2),
-            Layout(name="footer", size=1),
-        )
-        layout["top"].split_row(
-            Layout(name="live_stats", ratio=2),
-            Layout(name="sessions", ratio=3),
-        )
-        layout["mid"].split_row(
-            Layout(name="agents", ratio=1),
-            Layout(name="trends", ratio=1),
-        )
-        try:
-            layout["header"].update(make_banner(tick, stats, force_compact=True))
-        except Exception:
-            layout["header"].update(Panel(Text("⚡ Agent Pulse", style=f"bold {C_NEON_CYAN}")))
-        try:
-            layout["live_stats"].update(make_live_stats(stats, tick))
-        except Exception as e:
-            layout["live_stats"].update(Panel(Text(f"Error: {e}", style=C_NEON_RED)))
-        try:
-            layout["sessions"].update(make_active_sessions(stats, tick))
-        except Exception as e:
-            layout["sessions"].update(Panel(Text(f"Error: {e}", style=C_NEON_RED)))
-        try:
-            layout["agents"].update(make_agent_breakdown(stats, tick))
-        except Exception as e:
-            layout["agents"].update(Panel(Text(f"Error: {e}", style=C_NEON_RED)))
-        try:
-            layout["trends"].update(make_trends(stats, tick))
-        except Exception as e:
-            layout["trends"].update(Panel(Text(f"Error: {e}", style=C_NEON_RED)))
-        layout["footer"].update(make_footer(tick, refresh))
-        return layout
-
-    # Full layout
-    layout.split_column(
-        Layout(name="header", size=10),
-        Layout(name="top", ratio=3),
-        Layout(name="mid", ratio=4),
-        Layout(name="bottom", ratio=2),
-        Layout(name="footer", size=1),
-    )
-    layout["top"].split_row(
-        Layout(name="live_stats", ratio=2),
-        Layout(name="sessions", ratio=3),
-    )
-    layout["mid"].split_row(
-        Layout(name="agents", ratio=3),
-        Layout(name="trends", ratio=3),
-    )
-
-    try:
-        layout["header"].update(make_banner(tick, stats))
-    except Exception:
-        layout["header"].update(Panel(Text("⚡ Agent Pulse", style=f"bold {C_NEON_CYAN}")))
-    try:
-        layout["live_stats"].update(make_live_stats(stats, tick))
-    except Exception as e:
-        layout["live_stats"].update(Panel(Text(f"Error: {e}", style=C_NEON_RED)))
-    try:
-        layout["sessions"].update(make_active_sessions(stats, tick))
-    except Exception as e:
-        layout["sessions"].update(Panel(Text(f"Error: {e}", style=C_NEON_RED)))
-    try:
-        layout["agents"].update(make_agent_breakdown(stats, tick))
-    except Exception as e:
-        layout["agents"].update(Panel(Text(f"Error: {e}", style=C_NEON_RED)))
-    try:
-        layout["trends"].update(make_trends(stats, tick))
-    except Exception as e:
-        layout["trends"].update(Panel(Text(f"Error: {e}", style=C_NEON_RED)))
-    try:
-        layout["bottom"].update(make_installed_agents(stats, tick))
-    except Exception as e:
-        layout["bottom"].update(Panel(Text(f"Error: {e}", style=C_NEON_RED)))
-    layout["footer"].update(make_footer(tick, refresh))
-
-    return layout
-
-
-# ─── Startup splash ──────────────────────────────────────────────────────────
-
-def _show_startup_splash(console: Console) -> None:
-    """Clean boot sequence with in-place braille spinners."""
+    console = Console()
     console.clear()
     console.print()
 
-    # Banner — instant, white
     for line in BANNER_ART.strip("\n").split("\n"):
-        console.print(Align.center(Text(line, style="bold white")))
-    console.print(Align.center(Text(BANNER_SUBTITLE, style="bold white")))
+        console.print(RAlign.center(Text(line, style="bold white")))
+    console.print(RAlign.center(Text("Agent Dashboard for the Copilot CLI", style="bold white")))
     console.print()
 
-    # Boot stages — each a different color with spinner (~5s total)
     stages = [
-        ("Scanning processes",         0.8, C_NEON_CYAN),
-        ("Connecting to session store", 0.9, C_NEON_GREEN),
-        ("Loading agent registry",     0.9, C_NEON_PINK),
-        ("Mapping active sessions",    1.0, C_WARN),
+        ("Scanning processes",         0.8, "#00f5ff"),
+        ("Connecting to session store", 0.9, "#00ff87"),
+        ("Loading agent registry",     0.9, "#ff00ff"),
+        ("Mapping active sessions",    1.0, "#ffd75f"),
         ("Rendering dashboard",        0.7, "#bf7fff"),
     ]
     for label, duration, color in stages:
@@ -1347,259 +1652,76 @@ def _show_startup_splash(console: Console) -> None:
             spinner_style=f"bold {color}",
         ):
             time.sleep(duration)
-        console.print(Align.center(Text(f"  ✓ {label}", style=f"bold {color}")))
+        console.print(RAlign.center(Text(f"  ✓ {label}", style=f"bold {color}")))
 
     console.print()
     online = Text(justify="center")
-    online.append("  ◉ ", style=f"bold {C_NEON_GREEN}")
-    online.append("ONLINE", style=f"bold {C_NEON_GREEN}")
-    console.print(Align.center(online))
+    online.append("  ◉ ", style="bold #00ff87")
+    online.append("ONLINE", style="bold #00ff87")
+    console.print(RAlign.center(online))
     time.sleep(0.3)
 
 
-# ─── Modes ────────────────────────────────────────────────────────────────────
+def _mode_export() -> None:
+    """Export current metrics as JSON to stdout."""
+    store = PulseStore()
+    engine = MetricsEngine(store)
+    m = engine.poll()
+    data = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "version": VERSION,
+        "active_sessions": m.active_sessions,
+        "running_agents_est": m.running_agents_est,
+        "spawned_all_time": m.spawned_all_time,
+        "spawned_today": m.spawned_today,
+        "spawned_week": m.spawned_week,
+        "spawned_month": m.spawned_month,
+        "spawned_by_type_24h": m.spawned_by_type_24h,
+        "velocity": m.velocity,
+        "peak_velocity": m.peak_velocity,
+        "success_rate_24h": m.success_rate_24h,
+        "error_count_24h": m.error_count_24h,
+        "health_score": m.health_score,
+        "tokens_today": m.tokens_today,
+        "cost_estimate_today": m.cost_estimate_today,
+        "model_dist_24h": m.model_dist_24h,
+        "installed_agents": [a[0] for a in discover_installed_agents()],
+    }
+    store.close()
+    print(json.dumps(data, indent=2))
 
-def mode_live(refresh: int = 5, force_compact: bool = False) -> None:
-    """Persistent live dashboard with SIGWINCH resize handling (from E)."""
-    console = Console()
-    tick = 0
-
-    # ─── Animated startup splash ─────────────────────────────────────────
-    _show_startup_splash(console)
-
-    try:
-        stats = collect_all_stats()
-    except Exception as e:
-        console.print(f"[{C_NEON_RED}]Error collecting stats:[/] {e}")
-        return
-
-    try:
-        with Live(
-            build_live_layout(stats, tick, refresh, force_compact),
-            console=console,
-            refresh_per_second=4,
-            screen=True,
-        ) as live:
-            while True:
-                try:
-                    time.sleep(refresh)
-                    tick += 1
-
-                    # SIGWINCH resize detection (from E)
-                    if check_terminal_resized():
-                        console = Console()
-
-                    try:
-                        stats = collect_all_stats()
-                    except sqlite3.OperationalError:
-                        pass  # Keep old stats if DB locked
-                    except Exception:
-                        pass
-
-                    live.update(build_live_layout(stats, tick, refresh, force_compact))
-                except KeyboardInterrupt:
-                    break
-    except Exception as e:
-        console.print(f"\n[{C_NEON_RED}]Live mode error:[/] {e}")
-
-
-def mode_snapshot() -> None:
-    """One-shot snapshot view."""
-    console = Console()
-    try:
-        stats = collect_all_stats()
-    except Exception as e:
-        console.print(f"[{C_NEON_RED}]Error collecting stats:[/] {e}")
-        return
-
-    console.print()
-    banner_content = Text.assemble(
-        Text(BANNER_ART, style=f"bold {C_NEON_CYAN}", justify="center"),
-        "\n",
-        Text(BANNER_SUBTITLE, style=f"bold {C_NEON_CYAN}", justify="center"),
-    )
-    console.print(Panel(
-        Align.center(banner_content),
-        box=box.DOUBLE_EDGE,
-        border_style=C_NEON_CYAN,
-        padding=(0, 2),
-    ))
-
-    summary = Table(
-        title=f"[bold {C_NEON_CYAN}]Quick Snapshot[/]",
-        box=box.ROUNDED,
-        expand=False,
-        min_width=60,
-    )
-    summary.add_column("Metric", style=C_MUTED, width=30)
-    summary.add_column("Value", style=C_LABEL, justify="right", width=10)
-    summary.add_column("Detail", style=C_DIM)
-
-    procs = stats["active_procs"]
-    sessions = stats["active_sessions"]
-
-    summary.add_row(Text("◉ Active CLI processes", style=C_GOOD), str(len(procs)), f"PIDs: {', '.join(str(p['pid']) for p in procs[:4])}")
-    summary.add_row(Text("◉ Open sessions", style=C_GOOD), str(len(sessions)), f"IDs: {', '.join(s['id'] for s in sessions[:4])}")
-    summary.add_row(Rule(style="#303050"), "", "")
-    summary.add_row("Sessions today", str(stats["today_sessions"]), f"turns: {stats['today_turns']}")
-    summary.add_row("Sessions this week", str(stats["week_sessions"]), "")
-    summary.add_row("Sessions this month", str(stats["month_sessions"]), "")
-    summary.add_row("All-time sessions", str(stats["total_sessions"]), f"turns: {stats['total_turns']}")
-    summary.add_row(Rule(style="#303050"), "", "")
-    summary.add_row(Text("Agents launched (24h)", style=C_WARN), str(stats["total_subagents_24h"]), _fmt_agent_types(stats["agents_24h"]))
-    summary.add_row("Installed agents", str(len(stats["installed_agents"])), ", ".join(stats["installed_agents"][:5]))
-    summary.add_row(Rule(style="#303050"), "", "")
-
-    # Peak concurrent & velocity (from A/D)
-    peak_val = max(stats.get("peak_concurrent_sessions", 0), stats.get("peak_concurrent_hour", 0))
-    summary.add_row(Text("⚡ Peak concurrent", style=C_WARN), str(peak_val), "max sessions/hour today")
-    velocity = stats.get("agent_velocity_per_hour", 0.0)
-    summary.add_row(Text("🚀 Agent velocity", style=C_NEON_CYAN), f"{velocity:.1f}/h", "agents per hour")
-
-    last_agent = stats.get("last_agent_launched")
-    if last_agent:
-        summary.add_row(Text("🕐 Last agent launched", style=C_NEON_CYAN), last_agent[:19], "")
-
-    if stats.get("db_locked"):
-        summary.add_row(Rule(style="#303050"), "", "")
-        summary.add_row(Text("⚠ Database", style=C_WARN), "LOCKED", "Some stats may be unavailable")
-
-    console.print(Align.center(summary))
-
-    if stats["active_sessions"]:
-        console.print(make_active_sessions(stats))
-
-    # Sparklines with trend arrows
-    sess_vals = [d["count"] for d in stats["daily_sessions"]]
-    agent_vals = [d["count"] for d in stats["daily_agents"]]
-    sp_s, trend_s = spark_with_trend(sess_vals, 14)
-    sp_a, trend_a = spark_with_trend(agent_vals, 14)
-    spark_panel = Panel(
-        Text.assemble(
-            Text(f"  14-day sessions {trend_s} ", style=C_MUTED),
-            Text(sp_s, style=C_NEON_CYAN),
-            Text(f"   ·   agents {trend_a} ", style=C_MUTED),
-            Text(sp_a, style=C_WARN),
-        ),
-        title=f"[{C_NEON_PINK}]📈 14-Day Sparklines[/]",
-        border_style=C_NEON_PINK,
-        box=box.ROUNDED,
-    )
-    console.print(spark_panel)
-
-    # 24h heatmap in snapshot too
-    hourly = stats.get("hourly_sessions_24h") or []
-    counts = [h["count"] for h in hourly]
-    if counts:
-        heatmap_panel = Panel(
-            Text.assemble(
-                Text("  24h activity  ", style=C_MUTED),
-                activity_heatmap(counts),
-                Text("  (░▒▓█ = session density per hour)", style=C_DIM),
-            ),
-            title=f"[{C_NEON_PINK}]📊 24-Hour Heatmap[/]",
-            border_style=C_NEON_PINK,
-            box=box.ROUNDED,
-        )
-        console.print(heatmap_panel)
-
-    console.print(
-        f"\n  [dim]Snapshot taken {stats['collected_at']}  ·  "
-        f"last scan: {format_time_delta(stats['collected_at'])}  ·  "
-        f"history saved to {HISTORY_FILE}[/dim]\n"
-    )
-
-
-def _fmt_agent_types(agents: dict) -> str:
-    if not agents:
-        return "none"
-    parts = [f"{n}×{c}" for n, c in sorted(agents.items(), key=lambda x: -x[1])[:4]]
-    return "  ".join(parts)
-
-
-def mode_history() -> None:
-    """Display historical stats."""
-    console = Console()
-    try:
-        stats = collect_all_stats()
-    except Exception as e:
-        console.print(f"[{C_NEON_RED}]Error collecting stats:[/] {e}")
-        return
-
-    console.print()
-    console.print(Rule(f"[bold {C_NEON_PINK}]📈 Agent Pulse — HISTORICAL STATS[/]"))
-    console.print()
-    console.print(make_trends(stats))
-
-    history = stats["history"]
-    t = Table(
-        title=f"[bold {C_NEON_CYAN}]All-time Daily History[/]",
-        box=box.ROUNDED,
-        expand=False,
-    )
-    t.add_column("Date", style=C_MUTED)
-    t.add_column("Sessions", style=C_NEON_CYAN, justify="right")
-    t.add_column("Turns", style=C_LABEL, justify="right")
-    t.add_column("Agents", style=C_WARN, justify="right")
-    t.add_column("Activity", min_width=20)
-
-    for date in sorted([k for k in history.keys() if isinstance(history[k], dict) and k[:2] == "20"], reverse=True)[:30]:
-        d = history[date]
-        s = d.get("sessions", 0)
-        a = d.get("agents", 0)
-        r = d.get("turns", 0)
-        activity = Text()
-        activity.append("S" * min(s, 20), style=C_NEON_CYAN)
-        activity.append("A" * min(a // max(a // 10 + 1, 1), 10), style=C_WARN)
-        t.add_row(date, str(s), str(r), str(a), activity)
-
-    console.print(Align.center(t))
-    console.print()
-
-
-def mode_export() -> None:
-    """Export stats as JSON to stdout."""
-    try:
-        stats = collect_all_stats()
-        for s in stats["active_sessions"]:
-            s["mtime"] = s["mtime"].isoformat()
-        print(json.dumps(stats, indent=2, default=str))
-    except Exception as e:
-        print(json.dumps({"error": str(e)}, indent=2))
-
-
-# ─── Entry point ─────────────────────────────────────────────────────────────
 
 def main() -> None:
+    import argparse
+
     parser = argparse.ArgumentParser(
-        prog="agent-pulse",
-        description="⚡ Agent Pulse — Real-time GitHub Copilot CLI Dashboard",
+        description="Agent Pulse — real-time agent tracking dashboard for GitHub Copilot CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Modes:
+  (default)    Launch the live Textual dashboard
+  --export     Export current metrics as JSON to stdout
+  --no-splash  Skip the boot animation
+
 Examples:
-  python agent_pulse.py              # one-shot snapshot
-  python agent_pulse.py --live       # persistent live dashboard (Ctrl+C to quit)
-  python agent_pulse.py --history    # historical stats only
-  python agent_pulse.py --export     # export JSON to stdout
-  python agent_pulse.py --live -r 10 # refresh every 10 seconds
-  python agent_pulse.py --compact    # force compact mode
-        """,
+  python agent_pulse.py                 # Launch dashboard
+  python agent_pulse.py --export        # JSON export
+  python agent_pulse.py --no-splash     # Skip boot animation
+""",
     )
-    parser.add_argument("--live",    "-l", action="store_true",  help="persistent live dashboard")
-    parser.add_argument("--history", "-H", action="store_true",  help="show historical stats")
-    parser.add_argument("--export",  "-e", action="store_true",  help="export JSON to stdout")
-    parser.add_argument("--compact", "-c", action="store_true",  help="force compact mode")
-    parser.add_argument("--refresh", "-r", type=int, default=5,  help="live refresh interval in seconds (default: 5)")
+    parser.add_argument("--export", "-e", action="store_true", help="Export JSON to stdout")
+    parser.add_argument("--no-splash", action="store_true", help="Skip boot animation")
+    parser.add_argument("--version", "-v", action="version", version=f"Agent Pulse v{VERSION}")
     args = parser.parse_args()
 
     if args.export:
-        mode_export()
-    elif args.history:
-        mode_history()
-    elif args.live:
-        mode_live(refresh=args.refresh, force_compact=args.compact)
-    else:
-        mode_snapshot()
+        _mode_export()
+        return
+
+    if not args.no_splash and os.environ.get("AGENT_PULSE_NO_SPLASH") != "1":
+        _show_startup_splash()
+
+    AgentPulseApp().run()
 
 
 if __name__ == "__main__":

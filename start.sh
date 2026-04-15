@@ -11,19 +11,19 @@ if [ ! -d "$VENV" ]; then
     python3 -m venv "$VENV"
 fi
 
-# Install deps if Rich is missing
-if ! "$VENV/bin/python" -c "import rich" 2>/dev/null; then
+# Install deps if textual is missing
+if ! "$VENV/bin/python" -c "import textual" 2>/dev/null; then
     echo "📦 Installing dependencies..."
     "$VENV/bin/pip" install --quiet -r "$SCRIPT_DIR/requirements.txt"
 fi
 
 # If already running inside a spawned terminal, just run directly
 if [ "$AGENT_PULSE_SPAWNED" = "1" ]; then
-    exec "$VENV/bin/python" "$SCRIPT_DIR/agent_pulse.py" --live "$@"
+    exec "$VENV/bin/python" "$SCRIPT_DIR/agent_pulse.py" "$@"
 fi
 
 # Open dashboard in a new terminal window
-CMD="export AGENT_PULSE_SPAWNED=1; cd '$SCRIPT_DIR' && '$VENV/bin/python' '$SCRIPT_DIR/agent_pulse.py' --live $*"
+CMD="export AGENT_PULSE_SPAWNED=1; cd '$SCRIPT_DIR' && '$VENV/bin/python' '$SCRIPT_DIR/agent_pulse.py' $*"
 
 if command -v osascript &>/dev/null; then
     # macOS — open a new Terminal.app window

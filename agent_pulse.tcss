@@ -1,0 +1,80 @@
+/* Agent Pulse — Neon Mission Control theme */
+
+Screen {
+  background: #06070a;
+}
+
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+#logo {
+  height: auto;
+  margin: 1 2 0 2;
+}
+
+#top_grid {
+  grid-size: 4;
+  grid-columns: 1fr 1fr 1fr 1fr;
+  grid-rows: auto;
+  grid-gutter: 1;
+  margin: 0 2;
+}
+
+#stats, #history, #mix, #signal, #health, #model_dist, #sessions, #installed {
+  height: auto;
+}
+
+#mid_grid {
+  grid-size: 2;
+  grid-columns: 1fr 1fr;
+  grid-rows: auto;
+  grid-gutter: 1;
+  margin: 0 2;
+}
+
+#bot_grid {
+  grid-size: 2;
+  grid-columns: 1fr 1fr;
+  grid-rows: auto;
+  grid-gutter: 1;
+  margin: 0 2;
+}
+
+#recent_box {
+  margin: 0 2;
+  padding: 1 1;
+  border: round #00F5D4;
+  background: #0b0f14;
+}
+
+#recent_title {
+  height: 1;
+  margin-bottom: 1;
+}
+
+#recent {
+  height: 1fr;
+  min-height: 8;
+}
+
+DataTable {
+  background: #0b0f14;
+  color: #cbd5e1;
+}
+
+DataTable > .datatable--header {
+  background: #0f172a;
+  color: #e2e8f0;
+  text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+  background: #1f2937;
+}
+
+Footer {
+  background: #0b0f14;
+  color: #94a3b8;
+}
