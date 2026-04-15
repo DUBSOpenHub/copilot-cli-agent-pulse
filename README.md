@@ -28,7 +28,7 @@ Then just type `agentpulse` — the dashboard opens in a new terminal window aut
 
 ## 🌟 Overview
 
-Agent Pulse is a **cyberpunk-themed, real-time terminal dashboard** that monitors your GitHub Copilot CLI sessions, agents, and activity. Built with Python, [Textual](https://github.com/Textualize/textual), and [Rich](https://github.com/Textualize/rich), it gives you full observability into your AI-powered development workflow.
+Agent Pulse is a **real-time terminal dashboard** that monitors your GitHub Copilot CLI sessions, agents, and activity. Built with Python, [Textual](https://github.com/Textualize/textual), and [Rich](https://github.com/Textualize/rich), it gives you full observability into your AI-powered development workflow.
 
 ### ✨ Features
 
@@ -43,7 +43,7 @@ Agent Pulse is a **cyberpunk-themed, real-time terminal dashboard** that monitor
 | ⚡ **Real-time Updates** | Configurable refresh rate with pulse wave animation |
 | 💾 **Persistent History** | Daily stats saved to `~/.copilot/agent-pulse/` |
 | 🔒 **DB Lock Resilience** | Graceful handling when the session store is busy |
-| 🎨 **Cyberpunk Aesthetic** | Neon color palette with gradient effects and heartbeat animations |
+| 🎨 **Polished Aesthetic** | Clean color palette with gradient effects and heartbeat animations |
 
 ---
 
