@@ -1332,13 +1332,13 @@ def _show_startup_splash(console: Console) -> None:
     console.print(Align.center(Text(BANNER_SUBTITLE, style="bold white")))
     console.print()
 
-    # Boot stages — each a different color with spinner
+    # Boot stages — each a different color with spinner (~5s total)
     stages = [
-        ("Scanning processes",         0.4, C_NEON_CYAN),
-        ("Connecting to session store", 0.3, C_NEON_GREEN),
-        ("Loading agent registry",     0.3, C_NEON_PINK),
-        ("Mapping active sessions",    0.4, C_WARN),
-        ("Rendering dashboard",        0.2, "#bf7fff"),
+        ("Scanning processes",         0.8, C_NEON_CYAN),
+        ("Connecting to session store", 0.9, C_NEON_GREEN),
+        ("Loading agent registry",     0.9, C_NEON_PINK),
+        ("Mapping active sessions",    1.0, C_WARN),
+        ("Rendering dashboard",        0.7, "#bf7fff"),
     ]
     for label, duration, color in stages:
         with console.status(
