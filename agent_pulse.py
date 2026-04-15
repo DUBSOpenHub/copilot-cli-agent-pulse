@@ -1322,38 +1322,32 @@ def build_live_layout(stats: dict, tick: int, refresh: int = 5, force_compact: b
 # ─── Startup splash ──────────────────────────────────────────────────────────
 
 def _show_startup_splash(console: Console) -> None:
-    """Clean boot sequence with braille spinners."""
+    """Clean boot sequence with in-place braille spinners."""
     console.clear()
     console.print()
 
-    # Banner — instant, no animation
+    # Banner — instant
     for line in BANNER_ART.strip("\n").split("\n"):
         console.print(Align.center(Text(line, style=f"bold {C_NEON_CYAN}")))
     console.print(Align.center(Text(BANNER_SUBTITLE, style=f"bold {C_NEON_CYAN}")))
     console.print()
 
-    # Boot stages with braille spinner
+    # Boot stages with proper in-place spinner using Rich Status
     stages = [
-        ("Scanning processes",         0.25),
-        ("Connecting to session store", 0.20),
-        ("Loading agent registry",     0.20),
-        ("Mapping active sessions",    0.25),
-        ("Rendering dashboard",        0.15),
+        ("Scanning processes",         0.4),
+        ("Connecting to session store", 0.3),
+        ("Loading agent registry",     0.3),
+        ("Mapping active sessions",    0.4),
+        ("Rendering dashboard",        0.2),
     ]
-    braille = HEARTBEAT_BRAILLE  # ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏
     for label, duration in stages:
-        frames = max(3, int(duration / 0.05))
-        for i in range(frames):
-            spin = braille[i % len(braille)]
-            line = Text(justify="center")
-            line.append(f"  {spin} ", style=f"bold {C_NEON_CYAN}")
-            line.append(label, style=C_DIM)
-            console.print(Align.center(line), end="\r")
-            time.sleep(0.05)
-        done = Text(justify="center")
-        done.append("  ✓ ", style=f"bold {C_NEON_GREEN}")
-        done.append(label, style=f"{C_NEON_GREEN}")
-        console.print(Align.center(done))
+        with console.status(
+            f"[bold {C_NEON_CYAN}]{label}[/]",
+            spinner="dots",
+            spinner_style=f"bold {C_NEON_CYAN}",
+        ):
+            time.sleep(duration)
+        console.print(Align.center(Text(f"  ✓ {label}", style=f"bold {C_NEON_GREEN}")))
 
     console.print()
     online = Text(justify="center")
