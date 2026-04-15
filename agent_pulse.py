@@ -1275,7 +1275,7 @@ def build_live_layout(stats: dict, tick: int, refresh: int = 5, force_compact: b
 
     # Full layout
     layout.split_column(
-        Layout(name="header", size=8),
+        Layout(name="header", size=10),
         Layout(name="top", ratio=3),
         Layout(name="mid", ratio=4),
         Layout(name="bottom", ratio=2),
@@ -1321,39 +1321,84 @@ def build_live_layout(stats: dict, tick: int, refresh: int = 5, force_compact: b
 
 # ─── Startup splash ──────────────────────────────────────────────────────────
 
-_SPLASH_STAGES = [
-    ("Scanning processes",    "🔍"),
-    ("Reading sessions",      "📂"),
-    ("Loading agent data",    "🤖"),
-    ("Building dashboard",    "⚡"),
-]
-
 def _show_startup_splash(console: Console) -> None:
-    """Animated boot sequence so user sees immediate feedback."""
+    """Cyberpunk boot sequence with dramatic reveal."""
+    term_w = console.width or 120
+
     console.clear()
+    console.print()
 
-    # Phase 1: banner reveal (line by line)
+    # Phase 1: glitch scanlines
+    scanline = "─" * min(term_w - 4, 80)
+    for i in range(3):
+        color = ["#003333", "#006666", C_NEON_CYAN][i]
+        console.print(Align.center(Text(scanline, style=f"dim {color}")))
+        time.sleep(0.04)
+
+    console.print()
+
+    # Phase 2: banner reveal with color gradient (dim → bright)
     banner_lines = BANNER_ART.strip("\n").split("\n")
-    console.print()
-    for line in banner_lines:
-        console.print(Align.center(Text(line, style=f"bold {C_NEON_CYAN}")))
-        time.sleep(0.06)
-    console.print(Align.center(Text(BANNER_SUBTITLE, style=f"bold {C_NEON_CYAN}")))
-    console.print()
+    gradient = ["#336666", "#44aaaa", "#00cccc", C_NEON_CYAN]
+    for i, line in enumerate(banner_lines):
+        color = gradient[min(i, len(gradient) - 1)]
+        console.print(Align.center(Text(line, style=f"bold {color}")))
+        time.sleep(0.07)
 
-    # Phase 2: progress stages
-    for label, icon in _SPLASH_STAGES:
+    # Phase 3: subtitle materializes
+    time.sleep(0.1)
+    subtitle = BANNER_SUBTITLE
+    # Type it out character by character (fast)
+    partial = ""
+    cursor = "█"
+    for ch in subtitle:
+        partial += ch
         line = Text(justify="center")
-        line.append(f"  {icon}  ", style="bold")
-        line.append(label, style=f"{C_NEON_GREEN}")
-        line.append("  ···", style=f"dim {C_DIM}")
-        console.print(Align.center(line))
-        time.sleep(0.15)
+        line.append(partial, style=f"bold {C_NEON_CYAN}")
+        line.append(cursor, style=f"bold {C_NEON_GREEN}")
+        console.print(Align.center(line), end="\r")
+        time.sleep(0.02)
+    # Final subtitle without cursor
+    console.print(Align.center(Text(subtitle, style=f"bold {C_NEON_CYAN}")))
 
     console.print()
-    ready = Text("▸ READY", style=f"bold {C_NEON_GREEN}", justify="center")
-    console.print(Align.center(ready))
-    time.sleep(0.3)
+
+    # Phase 4: system boot log
+    boot_steps = [
+        ("SYS",  "Initializing Agent Pulse v2.0",  C_NEON_CYAN),
+        ("SCAN", "Detecting Copilot CLI processes", C_NEON_GREEN),
+        ("DB",   "Connecting to session store",     C_WARN),
+        ("AGNT", "Loading agent registry",          C_NEON_PINK),
+        ("NET",  "Mapping active sessions",         C_NEON_CYAN),
+        ("DASH", "Rendering dashboard",             C_NEON_GREEN),
+    ]
+    for tag, msg, color in boot_steps:
+        line = Text(justify="center")
+        line.append(f"  [{tag}]", style=f"bold {C_MUTED}")
+        line.append(f"  {msg}", style=f"{color}")
+        dots = " ··· "
+        line.append(dots, style=f"dim {C_DIM}")
+        line.append("OK", style=f"bold {C_NEON_GREEN}")
+        console.print(Align.center(line))
+        time.sleep(0.1)
+
+    console.print()
+
+    # Phase 5: pulse wave burst + ONLINE
+    wave_chars = "▁▂▃▄▅▆▇█▇▆▅▄▃▂▁"
+    for width in [20, 35, 50]:
+        wave = (wave_chars * 5)[:width]
+        console.print(Align.center(Text(wave, style=f"bold {C_NEON_CYAN}")), end="\r")
+        time.sleep(0.08)
+    console.print(Align.center(Text((wave_chars * 5)[:50], style=f"bold {C_NEON_CYAN}")))
+
+    console.print()
+    online = Text(justify="center")
+    online.append("  ◉ ", style=f"bold {C_NEON_GREEN}")
+    online.append("ONLINE", style=f"bold {C_NEON_GREEN}")
+    online.append("  ·  Dashboard ready", style=f"dim {C_NEON_CYAN}")
+    console.print(Align.center(online))
+    time.sleep(0.4)
 
 
 # ─── Modes ────────────────────────────────────────────────────────────────────
