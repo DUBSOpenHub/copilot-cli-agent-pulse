@@ -1326,28 +1326,28 @@ def _show_startup_splash(console: Console) -> None:
     console.clear()
     console.print()
 
-    # Banner — instant
+    # Banner — instant, white
     for line in BANNER_ART.strip("\n").split("\n"):
-        console.print(Align.center(Text(line, style=f"bold {C_NEON_CYAN}")))
-    console.print(Align.center(Text(BANNER_SUBTITLE, style=f"bold {C_NEON_CYAN}")))
+        console.print(Align.center(Text(line, style="bold white")))
+    console.print(Align.center(Text(BANNER_SUBTITLE, style="bold white")))
     console.print()
 
-    # Boot stages with proper in-place spinner using Rich Status
+    # Boot stages — each a different color with spinner
     stages = [
-        ("Scanning processes",         0.4),
-        ("Connecting to session store", 0.3),
-        ("Loading agent registry",     0.3),
-        ("Mapping active sessions",    0.4),
-        ("Rendering dashboard",        0.2),
+        ("Scanning processes",         0.4, C_NEON_CYAN),
+        ("Connecting to session store", 0.3, C_NEON_GREEN),
+        ("Loading agent registry",     0.3, C_NEON_PINK),
+        ("Mapping active sessions",    0.4, C_WARN),
+        ("Rendering dashboard",        0.2, "#bf7fff"),
     ]
-    for label, duration in stages:
+    for label, duration, color in stages:
         with console.status(
-            f"[bold {C_NEON_CYAN}]{label}[/]",
+            f"[bold {color}]{label}[/]",
             spinner="dots",
-            spinner_style=f"bold {C_NEON_CYAN}",
+            spinner_style=f"bold {color}",
         ):
             time.sleep(duration)
-        console.print(Align.center(Text(f"  ✓ {label}", style=f"bold {C_NEON_GREEN}")))
+        console.print(Align.center(Text(f"  ✓ {label}", style=f"bold {color}")))
 
     console.print()
     online = Text(justify="center")
