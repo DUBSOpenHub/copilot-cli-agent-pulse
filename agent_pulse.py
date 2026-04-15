@@ -1312,30 +1312,37 @@ class HealthGauge(Static):
         bar_width = 24
         filled = int(round(score / 100 * bar_width))
         filled = max(0, min(bar_width, filled))
+
+        t = Table.grid(padding=(0, 2))
+        t.add_column(justify="left")
+        t.add_column(justify="right")
+
+        t.add_row(
+            Text("Health Score", style="bold white"),
+            Text(f"{score}/100  {label}", style=f"bold {color}"),
+        )
+
         gauge = Text()
         gauge.append("█" * filled, style=f"bold {color}")
         gauge.append("░" * (bar_width - filled), style="#2a2a3e")
 
-        score_text = Text.assemble(
-            ("  ", ""),
-            (str(score), f"bold {color}"),
-            ("/100  ", "#8D99AE"),
-            (label, f"bold {color}"),
-        )
+        sr_color = "bold #7CFF6B" if m.success_rate_24h >= 0.9 else "bold #FFD166"
+        err_color = "bold #FF4D6D" if m.error_count_24h > 0 else "#8D99AE"
 
-        # Success rate line
-        sr_text = Text.assemble(
-            ("Success: ", "#8D99AE"),
-            (f"{m.success_rate_24h:.0%}", "bold #7CFF6B" if m.success_rate_24h >= 0.9 else "bold #FFD166"),
-            ("  Errors: ", "#8D99AE"),
-            (str(m.error_count_24h), "bold #FF4D6D" if m.error_count_24h > 0 else "#8D99AE"),
+        t.add_row(
+            Text("Success Rate", style="#8D99AE"),
+            Text(f"{m.success_rate_24h:.0%}", style=sr_color),
+        )
+        t.add_row(
+            Text("Errors (24h)", style="#8D99AE"),
+            Text(str(m.error_count_24h), style=err_color),
         )
 
         pulse = "●" if self.tick % 2 == 0 else "○"
         status = Text.assemble((pulse + " ", f"bold {color}"), ("MONITORING", f"bold {color}"))
 
         return Panel(
-            Group(gauge, score_text, "", sr_text, status),
+            Group(gauge, "", t, "", status),
             border_style=color,
             title="[bold #00F5D4]♥ FLEET HEALTH[/]",
         )
