@@ -656,25 +656,36 @@ def get_last_agent_launched() -> str | None:
     latest_ts: str | None = None
     if not SESSION_STATE.exists():
         return None
-    for sess_dir in SESSION_STATE.iterdir():
-        if not sess_dir.is_dir():
-            continue
+    # Sort session dirs by modification time (newest first) and limit scan
+    try:
+        sess_dirs = sorted(
+            (d for d in SESSION_STATE.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+    except Exception:
+        return None
+    for sess_dir in sess_dirs[:20]:  # Only check 20 most recent sessions
         ef = sess_dir / "events.jsonl"
         if not ef.exists():
             continue
         try:
-            with open(ef) as f:
-                for line in f:
-                    try:
-                        ev = json.loads(line)
-                        if ev.get("type") == "subagent.started":
-                            ts = ev.get("timestamp", "")
-                            if ts and (latest_ts is None or ts > latest_ts):
-                                latest_ts = ts
-                    except Exception:
-                        pass
+            # Read file in reverse to find latest event faster
+            lines = ef.read_text().splitlines()
+            for line in reversed(lines):
+                try:
+                    ev = json.loads(line)
+                    if ev.get("type") == "subagent.started":
+                        ts = ev.get("timestamp", "")
+                        if ts and (latest_ts is None or ts > latest_ts):
+                            latest_ts = ts
+                        break  # Found latest in this file, move on
+                except Exception:
+                    pass
         except Exception:
             pass
+        if latest_ts:
+            break  # Found one — most recent session wins
     return latest_ts
 
 
@@ -830,8 +841,15 @@ def make_banner(tick: int = 0, stats: dict | None = None, force_compact: bool = 
         info_line.append(f"  ·  {date_str}  {now_str}", style=f"dim {C_NEON_CYAN}")
         info_line.append(f"  ·  ⏱ uptime {uptime}", style=C_DIM)
 
-        content = Text.assemble(banner_text, "\n", subtitle_text, "\n\n", wave_text, "\n", title_line, "\n", info_line)
-        return Panel(Align.center(content), border_style=border, box=box.HEAVY, padding=(0, 2))
+        content = Group(
+            Align.center(banner_text),
+            Align.center(subtitle_text),
+            Text(),
+            Align.center(wave_text),
+            Align.center(title_line),
+            Align.center(info_line),
+        )
+        return Panel(content, border_style=border, box=box.HEAVY, padding=(0, 2))
     except Exception:
         return Panel(Text("⚡ Agent Pulse", style=f"bold {C_NEON_CYAN}"), border_style=C_NEON_CYAN, box=box.HEAVY)
 
@@ -1301,12 +1319,52 @@ def build_live_layout(stats: dict, tick: int, refresh: int = 5, force_compact: b
     return layout
 
 
+# ─── Startup splash ──────────────────────────────────────────────────────────
+
+_SPLASH_STAGES = [
+    ("Scanning processes",    "🔍"),
+    ("Reading sessions",      "📂"),
+    ("Loading agent data",    "🤖"),
+    ("Building dashboard",    "⚡"),
+]
+
+def _show_startup_splash(console: Console) -> None:
+    """Animated boot sequence so user sees immediate feedback."""
+    console.clear()
+
+    # Phase 1: banner reveal (line by line)
+    banner_lines = BANNER_ART.strip("\n").split("\n")
+    console.print()
+    for line in banner_lines:
+        console.print(Align.center(Text(line, style=f"bold {C_NEON_CYAN}")))
+        time.sleep(0.06)
+    console.print(Align.center(Text(BANNER_SUBTITLE, style=f"bold {C_NEON_CYAN}")))
+    console.print()
+
+    # Phase 2: progress stages
+    for label, icon in _SPLASH_STAGES:
+        line = Text(justify="center")
+        line.append(f"  {icon}  ", style="bold")
+        line.append(label, style=f"{C_NEON_GREEN}")
+        line.append("  ···", style=f"dim {C_DIM}")
+        console.print(Align.center(line))
+        time.sleep(0.15)
+
+    console.print()
+    ready = Text("▸ READY", style=f"bold {C_NEON_GREEN}", justify="center")
+    console.print(Align.center(ready))
+    time.sleep(0.3)
+
+
 # ─── Modes ────────────────────────────────────────────────────────────────────
 
 def mode_live(refresh: int = 5, force_compact: bool = False) -> None:
     """Persistent live dashboard with SIGWINCH resize handling (from E)."""
     console = Console()
     tick = 0
+
+    # ─── Animated startup splash ─────────────────────────────────────────
+    _show_startup_splash(console)
 
     try:
         stats = collect_all_stats()
