@@ -40,5 +40,5 @@ elif command -v xterm &>/dev/null; then
     echo "⚡ Agent Pulse launched in xterm."
 else
     # Fallback — run in current terminal
-    exec "$VENV/bin/python" "$SCRIPT_DIR/agent_pulse.py" --live "$@"
+    exec "$VENV/bin/python" "$SCRIPT_DIR/agent_pulse.py" "$@"
 fi
