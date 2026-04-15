@@ -717,11 +717,6 @@ footer a{color:var(--cyan)}
         <h3>Keyboard Shortcuts</h3>
         <p>Pause, cycle timeframes, export snapshots — power-user keybinds for zero-mouse operation.</p>
       </div>
-      <div class="feature-card reveal-blur reveal-delay-5">
-        <span class="feature-icon">🪙</span>
-        <h3>Token Usage</h3>
-        <p>Track token consumption across models with 24-hour sparklines and real-time cost estimation.</p>
-      </div>
     </div>
   </div>
 </section>
@@ -1141,16 +1136,6 @@ footer a{color:var(--cyan)}
       for(var bi=0;bi<12;bi++) mbar+=bi<mfilled?'<span class="'+m.cls+'">█</span>':'<span class="t-dim">░</span>';
       html+='<div class="term-line"><span class="t-dim">║</span>  <span class="'+m.cls+' t-bold">'+m.name.padEnd(16)+'</span> <span class="'+m.cls+' t-bold">'+String(m.cnt).padStart(3)+'</span> <span class="t-dim">('+String(pct).padStart(2)+'%)</span>  '+mbar+'  <span class="t-dim">║</span></div>';
     });
-    html+='<div class="term-line">'+panelBot()+'</div>';
-    html+='<div class="term-line">&nbsp;</div>';
-
-    // Token Usage
-    var tokTotal=rnd(80000,250000);
-    var tokCost=(tokTotal/1000000*9).toFixed(4);
-    html+='<div class="term-line">'+panelTop('🪙 TOKEN USAGE')+'</div>';
-    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Tokens (24h):</span>  <span class="t-cyan t-bold">'+(tokTotal>=1000?((tokTotal/1000).toFixed(1)+'K'):tokTotal)+'</span>  <span class="t-dim">║</span></div>';
-    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Est. Cost:   </span>  <span class="t-green t-bold">$'+tokCost+'</span>  <span class="t-dim">║</span></div>';
-    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-dim">24h: </span><span class="t-cyan">'+sparkline(20)+'</span>  <span class="t-dim">║</span></div>';
     html+='<div class="term-line">'+panelBot()+'</div>';
     html+='<div class="term-line">&nbsp;</div>';
 
