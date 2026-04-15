@@ -42,7 +42,7 @@ Agent Pulse is a **cyberpunk-themed, real-time terminal dashboard** that monitor
 | Feature | Description |
 |---------|-------------|
 | 🖥️ **Live Session Tracking** | Real-time monitoring of active Copilot CLI terminal sessions |
-| 🤖 **Agent Monitoring** | Track 16+ agent types: task, explore, general-purpose, rubber-duck, code-review, and custom agents |
+| 🤖 **Agent Monitoring** | Track 15+ agent types: task, explore, general-purpose, rubber-duck, code-review, and custom agents |
 | 📊 **14-Day Trend Analysis** | Sparklines, daily breakdowns, gradient bar charts, and trend arrows |
 | 🔥 **24h Activity Heatmap** | Hourly session density visualization with `░▒▓█` blocks |
 | 🚀 **Agent Velocity** | Agents-per-hour metric with peak concurrent tracking |
@@ -148,7 +148,7 @@ That's it. The dashboard auto-detects your Copilot CLI sessions and starts monit
 
 ### Agent Breakdown
 - Stacked distribution bar by agent type
-- Colored badges for 16+ agent types
+- Colored badges for 15+ agent types
 - Gradient share bars per type
 - Skill invocation tracking
 

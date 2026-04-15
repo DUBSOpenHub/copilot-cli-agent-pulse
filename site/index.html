@@ -11,9 +11,13 @@
 <meta property="og:description" content="A stunning real-time terminal dashboard for monitoring GitHub Copilot CLI agents. Track sessions, agents, trends, and velocity.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://github.com/DUBSOpenHub/copilot-cli-agent-pulse">
+<meta property="og:image" content="https://raw.githubusercontent.com/DUBSOpenHub/copilot-cli-agent-pulse/main/assets/og-share.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Agent Pulse — Real-Time Agent Dashboard">
 <meta name="twitter:description" content="Real-time terminal dashboard for monitoring GitHub Copilot CLI agents.">
+<meta name="twitter:image" content="https://raw.githubusercontent.com/DUBSOpenHub/copilot-cli-agent-pulse/main/assets/og-share.png">
 <meta name="theme-color" content="#00f5ff">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -287,6 +291,7 @@ section{position:relative;padding:6rem 1.5rem}
 .terminal-body .t-dim{color:var(--text-dim);text-shadow:none}
 .terminal-body .t-white{color:#fff;text-shadow:0 0 6px rgba(255,255,255,.18)}
 .terminal-body .t-orange{color:var(--orange);text-shadow:0 0 8px rgba(255,165,0,.24)}
+.terminal-body .t-purple{color:#B388FF;text-shadow:0 0 8px rgba(179,136,255,.24)}
 .terminal-body .t-bold{font-weight:700}
 
 .term-line{white-space:pre;opacity:0;animation:termFadeIn .3s forwards}
@@ -590,7 +595,7 @@ footer a{color:var(--cyan)}
     <ul class="nav-links" id="navLinks">
       <li><a href="#demo">Demo</a></li>
       <li><a href="#features">Features</a></li>
-      <li><a href="#modes">Modes</a></li>
+      <li><a href="#modes">Shortcuts</a></li>
       <li><a href="#architecture">Architecture</a></li>
       <li><a href="#quickstart">Quick Start</a></li>
       <li><a href="https://github.com/DUBSOpenHub/copilot-cli-agent-pulse" class="btn btn-outline" style="padding:.4rem 1rem;font-size:.75rem">★ GitHub</a></li>
@@ -621,12 +626,12 @@ footer a{color:var(--cyan)}
 <section id="stats" style="padding:2rem 1.5rem;background:var(--bg)">
   <div class="stat-strip">
     <div class="stat-item reveal-scale">
-      <div class="stat-value" data-target="16" data-suffix="+">0</div>
+      <div class="stat-value" data-target="15" data-suffix="+">0</div>
       <div class="stat-label">Agent Types</div>
     </div>
     <div class="stat-item reveal-scale reveal-delay-1">
       <div class="stat-value" data-target="5">0</div>
-      <div class="stat-label">Operating Modes</div>
+      <div class="stat-label">Keyboard Shortcuts</div>
     </div>
     <div class="stat-item reveal-scale reveal-delay-2">
       <div class="stat-value" data-target="24" data-suffix="h">0</div>
@@ -688,14 +693,29 @@ footer a{color:var(--cyan)}
         <p>Hourly session density visualization shows when you're most productive with AI agents.</p>
       </div>
       <div class="feature-card reveal-right reveal-delay-5">
+        <span class="feature-icon">♥</span>
+        <h3>Fleet Health Score</h3>
+        <p>Composite 0-100 health score combining success rates, error rates, and session stability at a glance.</p>
+      </div>
+      <div class="feature-card reveal-blur reveal-delay-1">
+        <span class="feature-icon">🧠</span>
+        <h3>Model Distribution</h3>
+        <p>See which AI models are running across your sessions — Claude, GPT, Haiku — with colored bars and percentages.</p>
+      </div>
+      <div class="feature-card reveal-left reveal-delay-2">
         <span class="feature-icon">🚀</span>
         <h3>Agent Velocity</h3>
         <p>Agents-per-hour velocity metric with peak tracking and acceleration indicators.</p>
       </div>
-      <div class="feature-card reveal-blur reveal-delay-1">
-        <span class="feature-icon">📱</span>
-        <h3>Responsive Layout</h3>
-        <p>3-tier adaptive UI: full → compact → micro dashboard. Works in any terminal size.</p>
+      <div class="feature-card reveal-right reveal-delay-3">
+        <span class="feature-icon">🔔</span>
+        <h3>Alert System</h3>
+        <p>Toast notifications for new agent launches, error rate spikes, and milestone celebrations.</p>
+      </div>
+      <div class="feature-card reveal-scale reveal-delay-4">
+        <span class="feature-icon">⌨️</span>
+        <h3>Keyboard Shortcuts</h3>
+        <p>Pause, cycle timeframes, export snapshots — power-user keybinds for zero-mouse operation.</p>
       </div>
     </div>
   </div>
@@ -705,34 +725,35 @@ footer a{color:var(--cyan)}
 <section id="modes">
   <div class="container">
     <div class="reveal">
-      <span class="section-tag">Operating Modes</span>
-      <h2 class="section-title glow-pink">Five Ways to Run</h2>
+      <span class="section-tag">Keyboard Shortcuts</span>
+      <h2 class="section-title glow-pink">One Command, All Controls Inside</h2>
+      <p style="color:var(--text-dim);max-width:550px">Just run <code style="color:var(--cyan)">python agent_pulse.py</code> — everything is controlled with keyboard shortcuts from inside the dashboard.</p>
     </div>
     <div class="modes-list">
       <div class="mode-item reveal-left reveal-delay-1">
-        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py</div>
-        <span class="mode-label">Snapshot</span>
-        <span class="mode-desc">Instant point-in-time view of all active sessions and agents</span>
+        <div class="mode-cmd"><span class="prompt">SPACE</span></div>
+        <span class="mode-label">⏸ Pause / Resume</span>
+        <span class="mode-desc">Freeze the dashboard to read metrics without data churn, resume anytime</span>
       </div>
       <div class="mode-item reveal-right reveal-delay-2">
-        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py --live</div>
-        <span class="mode-label">Live</span>
-        <span class="mode-desc">Real-time auto-refreshing dashboard with sparklines and heatmaps</span>
+        <div class="mode-cmd"><span class="prompt">t</span></div>
+        <span class="mode-label">⏱ Cycle Timeframe</span>
+        <span class="mode-desc">Switch between 1h → 6h → 24h → 7d views to zoom in and out of your data</span>
       </div>
       <div class="mode-item reveal-left reveal-delay-3">
-        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py --history</div>
-        <span class="mode-label">History</span>
-        <span class="mode-desc">14-day historical stats, daily breakdowns, and trend analysis</span>
+        <div class="mode-cmd"><span class="prompt">e</span></div>
+        <span class="mode-label">📤 Export Snapshot</span>
+        <span class="mode-desc">Save current metrics as JSON for integration with other tools and scripts</span>
       </div>
       <div class="mode-item reveal-right reveal-delay-4">
-        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py --export</div>
-        <span class="mode-label">Export</span>
-        <span class="mode-desc">Machine-readable JSON output for integration with other tools</span>
+        <div class="mode-cmd"><span class="prompt">r</span></div>
+        <span class="mode-label">🔄 Refresh</span>
+        <span class="mode-desc">Force an immediate data refresh — pull latest sessions, agents, and metrics</span>
       </div>
       <div class="mode-item reveal-left reveal-delay-5">
-        <div class="mode-cmd"><span class="prompt">$ </span>python agent_pulse.py --compact</div>
-        <span class="mode-label">Compact</span>
-        <span class="mode-desc">Minimal single-line display for narrow terminals and status bars</span>
+        <div class="mode-cmd"><span class="prompt">q</span></div>
+        <span class="mode-label">👋 Quit</span>
+        <span class="mode-desc">Exit the dashboard cleanly — all data is persisted to SQLite automatically</span>
       </div>
     </div>
   </div>
@@ -806,7 +827,7 @@ footer a{color:var(--cyan)}
 <!-- ═══ FOOTER ══════════════════════════════════════ -->
 <footer>
   <p>Built with <span class="footer-heart">❤️</span> for the <a href="https://github.com/DUBSOpenHub/copilot-cli-agent-pulse">GitHub Copilot CLI</a> community</p>
-  <p style="margin-top:.5rem;font-size:.75rem;color:var(--text-dim)">© 2025 Agent Pulse · DUBSOpenHub</p>
+  <p style="margin-top:.5rem;font-size:.75rem;color:var(--text-dim)">© 2026 Agent Pulse · DUBSOpenHub</p>
 </footer>
 
 <!-- Back to Top -->
@@ -931,18 +952,12 @@ footer a{color:var(--cyan)}
     {name:'evo-forge',     version:'1.1.0',state:'LOADING',dot:'○',dotCls:'t-dim',   stCls:'t-yellow'},
   ];
   const bannerLines=[
-    '  █████╗  ██████╗ ███████╗███╗   ██╗████████╗',
-    ' ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝',
-    ' ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ',
-    ' ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ',
-    ' ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ',
-    ' ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ',
-    '       ██████╗ ██╗   ██╗██║     ███████╗███████╗',
-    '       ██╔══██╗██║   ██║██║     ██╔════╝██╔════╝',
-    '       ██████╔╝██║   ██║██║     ███████╗█████╗  ',
-    '       ██╔═══╝ ██║   ██║██║     ╚════██║██╔══╝  ',
-    '       ██║     ╚██████╔╝███████╗███████║███████╗',
-    '       ╚═╝      ╚═════╝ ╚══════╝╚══════╝╚══════╝',
+    '     _                    _     ____        _          ',
+    '    / \\   __ _  ___ _ __ | |_  |  _ \\ _   _| |___  ___ ',
+    '   / _ \\ / _` |/ _ \\ \'_ \\| __| | |_) | | | | / __|/ _ \\',
+    '  / ___ \\ (_| |  __/ | | | |_  |  __/| |_| | \\__ \\  __/',
+    ' /_/   \\_\\__, |\\___|_| |_|\\__| |_|    \\__,_|_|___/\\___|',
+    '         |___/                                         ',
   ];
 
   function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a}
@@ -1038,13 +1053,28 @@ footer a{color:var(--cyan)}
     const typeClsMap={'explore':'t-cyan','task':'t-yellow','code-review':'t-pink','general-purpose':'t-green','rubber-duck':'t-orange'};
     let html='';
 
+    // Banner — white ASCII art
     bannerLines.forEach(function(l){
-      html+='<div class="term-line"><span class="t-cyan t-bold">'+l+'</span></div>';
+      html+='<div class="term-line"><span class="t-white t-bold">'+l+'</span></div>';
     });
 
+    html+='<div class="term-line" style="text-align:center"><span class="t-pink t-bold">⚡ for GitHub Copilot CLI</span></div>';
     html+='<div class="term-line">  <span id="heartEl">'+heartbeats[heartIdx]+'</span>  <span class="t-dim">monitoring</span> <span class="t-green t-bold">'+agents+'</span> <span class="t-dim">agents across</span> <span class="t-cyan t-bold">'+sessions+'</span> <span class="t-dim">active sessions</span></div>';
-    html+='<div class="term-line">  <span class="t-dim">AGENT PULSE v2.1.0</span>  <span class="t-dim">│</span>  <span class="t-dim">uptime: </span><span class="t-green" id="uptimeEl">'+getUptime()+'</span>  <span class="t-dim">│</span>  <span class="t-dim">pid: </span><span class="t-yellow">'+rnd(10000,20000)+'</span></div>';
-    html+='<div class="term-line">  <span id="waveEl">'+getWave()+'</span></div>';
+    html+='<div class="term-line">  <span class="t-dim">AGENT PULSE v2.1.0</span>  <span class="t-dim">│</span>  <span class="t-dim">uptime: </span><span class="t-yellow" id="uptimeEl">'+getUptime()+'</span>  <span class="t-dim">│</span>  <span class="t-dim">pid: </span><span class="t-cyan">'+rnd(10000,20000)+'</span></div>';
+    html+='<div class="term-line">&nbsp;</div>';
+
+    // Row 1: Fleet Health + Live Metrics + Trend Analysis + Heatmap+Signal
+    var healthScore=Math.min(100,Math.max(0,85+rnd(-10,10)));
+    var hColor=healthScore>=80?'t-green':healthScore>=60?'t-yellow':'t-pink';
+    var hLabel=healthScore>=80?'EXCELLENT':healthScore>=60?'GOOD':'WARNING';
+    var hGauge='';
+    var hFilled=Math.round(healthScore/100*16);
+    for(var gi=0;gi<16;gi++) hGauge+=gi<hFilled?'<span class="'+hColor+'">█</span>':'<span class="t-dim">░</span>';
+
+    html+='<div class="term-line">'+panelTop('♥ FLEET HEALTH')+'</div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  '+hGauge+' <span class="'+hColor+' t-bold">'+healthScore+'</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="'+hColor+' t-bold">  '+hLabel+'</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line">'+panelBot()+'</div>';
     html+='<div class="term-line">&nbsp;</div>';
 
     html+='<div class="term-line">'+panelTop('● LIVE METRICS')+'</div>';
@@ -1052,9 +1082,63 @@ footer a{color:var(--cyan)}
     html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Running Agents :</span>  <span class="t-cyan t-bold" id="numAgts">'+String(lastVals.agents).padStart(2)+'</span>    '+bar(agents,20,20)+'  <span class="t-dim">║</span></div>';
     html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Velocity       :</span>  <span class="t-yellow t-bold" id="numVel">'+lastVals.velocity.toFixed(1)+'</span><span class="t-dim">/hr</span>  <span class="t-dim">peak: '+peak+'/hr</span>  <span class="t-dim">║</span></div>';
     html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-white t-bold">Today\u2019s Total  :</span>  <span class="t-pink t-bold" id="numTod">'+lastVals.today+'</span>   <span class="t-dim">▲ trending up</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-dim">⠋ </span><span class="t-green t-bold">LIVE</span>  <span class="t-green">●</span>  <span class="t-dim">PULSE LOCK</span>  <span class="t-dim">║</span></div>';
     html+='<div class="term-line">'+panelBot()+'</div>';
     html+='<div class="term-line">&nbsp;</div>';
 
+    // Row 1 continued: Trend Analysis
+    var s24h=rnd(30,80),s7d=rnd(200,500),s30d=rnd(800,2000);
+    html+='<div class="term-line">'+panelTop('📊 TREND ANALYSIS')+'</div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-dim">           24h    7d    30d</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-cyan t-bold">Sessions</span>   <span class="t-yellow">'+String(rnd(5,15)).padStart(3)+'</span>  <span class="t-green">'+String(rnd(30,80)).padStart(4)+'</span>  <span class="t-purple">'+String(rnd(100,300)).padStart(4)+'</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-green t-bold">Agents  </span>   <span class="t-yellow">'+String(s24h).padStart(3)+'</span>  <span class="t-green">'+String(s7d).padStart(4)+'</span>  <span class="t-purple">'+String(s30d).padStart(4)+'</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-green">14d agents   '+sparkline(14)+'</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-cyan">14d sessions '+sparkline(14)+'</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-green t-bold">  ▲ trending up</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-dim">All-time: </span><span class="t-cyan t-bold">'+rnd(1000,5000)+'</span><span class="t-dim"> agents</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line">'+panelBot()+'</div>';
+    html+='<div class="term-line">&nbsp;</div>';
+
+    // Heatmap + Signal
+    html+='<div class="term-line">'+panelTop('🔥 HEATMAP + SIGNAL')+'</div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-pink t-bold">🔥 24h heatmap</span>  <span class="t-orange">'+heatmap()+'</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>                 <span class="t-dim">0h          12h         23h</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-green t-bold">sessions   </span>  <span class="t-green">'+sparkline(24)+'</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-yellow t-bold">launches(5m)</span>  <span class="t-yellow">'+sparkline(24)+'</span>  <span class="t-dim">║</span></div>';
+    html+='<div class="term-line">'+panelBot()+'</div>';
+    html+='<div class="term-line">&nbsp;</div>';
+
+    // Row 2: Agent Breakdown + Model Distribution
+    html+='<div class="term-line">'+panelTop('◆ AGENT BREAKDOWN')+'</div>';
+    agentTypes.forEach(function(t,i){
+      const cnt=agentCounts[i];
+      const pct=Math.round(cnt/total*100);
+      html+='<div class="term-line"><span class="t-dim">║</span>  <span class="'+agentColors[i]+'">'+agentIcons[i]+' '+t.padEnd(18)+'</span> <span class="t-white t-bold">'+String(cnt).padStart(2)+'</span> <span class="t-dim">('+String(pct).padStart(2)+'%)</span>  '+bar(cnt,5,12)+'<span class="t-dim">║</span></div>';
+    });
+    html+='<div class="term-line">'+panelBot()+'</div>';
+    html+='<div class="term-line">&nbsp;</div>';
+
+    // Model Distribution (new)
+    var models=[
+      {name:'c/sonnet-4.6',  cnt:rnd(15,40), cls:'t-purple'},
+      {name:'c/haiku-4.5',   cnt:rnd(10,30), cls:'t-green'},
+      {name:'g/5.2',         cnt:rnd(5,20),  cls:'t-cyan'},
+      {name:'c/opus-4.6',    cnt:rnd(3,15),  cls:'t-pink'},
+      {name:'g/4.1',         cnt:rnd(2,10),  cls:'t-yellow'},
+    ];
+    var mTotal=models.reduce(function(a,m){return a+m.cnt;},0);
+    var mMax=models.reduce(function(a,m){return Math.max(a,m.cnt);},1);
+    html+='<div class="term-line">'+panelTop('🧠 MODEL DISTRIBUTION')+'</div>';
+    models.forEach(function(m){
+      var pct=Math.round(m.cnt/mTotal*100);
+      var mbar='';var mfilled=Math.round((m.cnt/mMax)*12);
+      for(var bi=0;bi<12;bi++) mbar+=bi<mfilled?'<span class="'+m.cls+'">█</span>':'<span class="t-dim">░</span>';
+      html+='<div class="term-line"><span class="t-dim">║</span>  <span class="'+m.cls+' t-bold">'+m.name.padEnd(16)+'</span> <span class="'+m.cls+' t-bold">'+String(m.cnt).padStart(3)+'</span> <span class="t-dim">('+String(pct).padStart(2)+'%)</span>  '+mbar+'  <span class="t-dim">║</span></div>';
+    });
+    html+='<div class="term-line">'+panelBot()+'</div>';
+    html+='<div class="term-line">&nbsp;</div>';
+
+    // Row 3: Active Sessions + Installed Agents
     html+='<div class="term-line">'+panelTop('▶ ACTIVE SESSIONS')+'</div>';
     html+='<div class="term-line"><span class="t-dim">║  SESSION-ID    PID    TYPE              STATUS  RUNTIME  ║</span></div>';
     ACTIVE_SESSIONS.forEach(function(s){
@@ -1063,15 +1147,6 @@ footer a{color:var(--cyan)}
       const tc=typeClsMap[s.type]||'t-cyan';
       const stHtml=s.status==='RUN'?'<span class="t-green">RUN</span>':'<span class="t-dim">IDL</span>';
       html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-cyan">'+s.id+'</span>  <span class="t-dim">'+String(s.pid).padStart(5)+'</span>  <span class="'+tc+'">'+s.type.padEnd(17)+'</span>  '+stHtml+'  <span class="t-yellow">'+rt+'</span>  <span class="t-dim">║</span></div>';
-    });
-    html+='<div class="term-line">'+panelBot()+'</div>';
-    html+='<div class="term-line">&nbsp;</div>';
-
-    html+='<div class="term-line">'+panelTop('◆ AGENT BREAKDOWN')+'</div>';
-    agentTypes.forEach(function(t,i){
-      const cnt=agentCounts[i];
-      const pct=Math.round(cnt/total*100);
-      html+='<div class="term-line"><span class="t-dim">║</span>  <span class="'+agentColors[i]+'">'+agentIcons[i]+' '+t.padEnd(18)+'</span> <span class="t-white t-bold">'+String(cnt).padStart(2)+'</span> <span class="t-dim">('+String(pct).padStart(2)+'%)</span>  '+bar(cnt,5,12)+'<span class="t-dim">║</span></div>';
     });
     html+='<div class="term-line">'+panelBot()+'</div>';
     html+='<div class="term-line">&nbsp;</div>';
@@ -1085,13 +1160,22 @@ footer a{color:var(--cyan)}
     html+='<div class="term-line">'+panelBot()+'</div>';
     html+='<div class="term-line">&nbsp;</div>';
 
-    html+='<div class="term-line">'+panelTop('◈ 14-DAY SPARKLINE  │  24h HEATMAP')+'</div>';
-    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-green">'+sparkline(14)+'</span>  <span class="t-dim">sessions</span>     <span class="t-orange">'+heatmap()+'</span>  <span class="t-dim">║</span></div>';
-    html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-cyan">'+sparkline(14)+'</span>  <span class="t-dim">agents  </span>     <span class="t-dim">0h          12h         23h</span>  <span class="t-dim">║</span></div>';
+    // Row 4: Recent Launches
+    html+='<div class="term-line">'+panelTop('📡 RECENT LAUNCHES')+'</div>';
+    html+='<div class="term-line"><span class="t-dim">║  AGE    TYPE              NAME                    MODEL    ║</span></div>';
+    var recentNames=['build-parser','find-auth','review-pr-42','run-tests','refactor-api','lint-check'];
+    var recentModels=['sonnet','haiku','sonnet','haiku','opus','haiku'];
+    for(var ri=0;ri<6;ri++){
+      var rAge=String(rnd(1,30))+'m';
+      var rType=agentTypes[ri%agentTypes.length];
+      var rTc=typeClsMap[rType]||'t-cyan';
+      html+='<div class="term-line"><span class="t-dim">║</span>  <span class="t-dim">'+rAge.padEnd(6)+'</span>  <span class="'+rTc+' t-bold">'+rType.padEnd(17)+'</span>  <span class="t-green">'+recentNames[ri].padEnd(22)+'</span>  <span class="t-dim">'+recentModels[ri].padEnd(8)+'</span>  <span class="t-dim">║</span></div>';
+    }
     html+='<div class="term-line">'+panelBot()+'</div>';
     html+='<div class="term-line">&nbsp;</div>';
 
-    html+='<div class="term-line"><span class="t-dim">  agent_pulse v2.1.0 — github.com/greggcochran/agent-pulse  </span><span class="cursor"></span></div>';
+    // Footer
+    html+='<div class="term-line"><span class="t-dim">  q Quit  r Refresh  ⏸ Pause  ⏱ Time  📤 Export</span><span class="cursor"></span></div>';
     return html;
   }
 
