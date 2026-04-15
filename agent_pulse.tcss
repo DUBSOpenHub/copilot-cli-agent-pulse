@@ -35,6 +35,7 @@ Screen {
   border: round #00F5D4;
   background: #0b0f14;
   height: auto;
+  max-height: 50%;
 }
 
 #recent_title {
@@ -45,7 +46,8 @@ Screen {
 #recent {
   height: auto;
   min-height: 8;
-  max-height: 20;
+  max-height: 30;
+  overflow-y: auto;
 }
 
 DataTable {

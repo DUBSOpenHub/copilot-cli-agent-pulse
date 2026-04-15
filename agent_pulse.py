@@ -419,6 +419,130 @@ class CopilotLogTailer:
             return None
 
 
+class SessionEventTailer:
+    """Parse agent launches from ~/.copilot/session-state/*/events.jsonl (JSON)."""
+
+    def __init__(self, store: "PulseStore"):
+        self.store = store
+        self.session_dir = Path.home() / ".copilot" / "session-state"
+
+    def _candidate_dirs(self, limit: int = 30) -> List[Path]:
+        if not self.session_dir.exists():
+            return []
+        dirs = [d for d in self.session_dir.iterdir() if d.is_dir()]
+        dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return dirs[:limit]
+
+    def poll_new_events(self) -> List[AgentEvent]:
+        out: List[AgentEvent] = []
+        for d in self._candidate_dirs():
+            evf = d / "events.jsonl"
+            if not evf.exists():
+                continue
+            try:
+                key = str(evf)
+                last_off = self.store.get_log_offset(key)
+                size = evf.stat().st_size
+                if last_off > size:
+                    last_off = 0
+                if size <= last_off:
+                    continue
+
+                with evf.open("rb") as f:
+                    f.seek(last_off)
+                    chunk = f.read(size - last_off)
+
+                self.store.set_log_offset(key, size)
+                text = chunk.decode("utf-8", errors="replace")
+                base_source = f"evt:{d.name}:{last_off}"
+
+                for i, line in enumerate(text.splitlines()):
+                    if "agent_type" not in line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    ev_type = data.get("type", "")
+                    dd = data.get("data", {})
+                    if not isinstance(dd, dict):
+                        continue
+
+                    # Only process execution_start events (have full arguments)
+                    # Skip execution_complete — those only have telemetry agent_type
+                    if ev_type == "tool.execution_complete":
+                        continue
+
+                    agent_type = None
+                    name = None
+                    model = None
+                    description = None
+
+                    # Source 1: tool.execution_start with arguments (primary)
+                    args = dd.get("arguments", {})
+                    if isinstance(args, dict) and "agent_type" in args:
+                        agent_type = args["agent_type"]
+                        name = args.get("name") or None
+                        model = args.get("model") or None
+                        description = args.get("description") or None
+
+                    # Source 2: tool.call with arguments
+                    if not agent_type:
+                        # Some events store arguments at data level
+                        if isinstance(dd, dict) and "agent_type" in dd:
+                            agent_type = dd["agent_type"]
+                            name = dd.get("name") or None
+                            model = dd.get("model") or None
+                            description = dd.get("description") or None
+
+                    if not agent_type:
+                        continue
+
+                    agent_type = agent_type if agent_type in AGENT_TYPES else "custom"
+
+                    # Use description as name fallback
+                    if not name and description:
+                        name = description[:80]
+
+                    # Detect outcome
+                    outcome = "unknown"
+                    result = dd.get("result", {})
+                    success = dd.get("success")
+                    if success is True:
+                        outcome = "success"
+                    elif success is False:
+                        outcome = "failure"
+                    elif isinstance(result, dict):
+                        if result.get("success") is True:
+                            outcome = "success"
+                        elif result.get("success") is False:
+                            outcome = "failure"
+
+                    # Parse timestamp
+                    ts_str = data.get("timestamp") or dd.get("timestamp") or ""
+                    ts = now_ts()
+                    if ts_str:
+                        try:
+                            dt = datetime.strptime(ts_str[:23] + "Z", "%Y-%m-%dT%H:%M:%S.%fZ")
+                            dt = dt.replace(tzinfo=timezone.utc)
+                            ts = int(dt.timestamp())
+                        except Exception:
+                            pass
+
+                    source = f"{base_source}:L{i}"
+                    out.append(AgentEvent(
+                        ts=ts, agent_type=agent_type,
+                        name=name, model=model,
+                        source=source, outcome=outcome,
+                    ))
+
+            except Exception:
+                continue
+
+        return self.store.insert_agent_events(out)
+
+
 # ----------------------------
 # SQLite Storage
 # ----------------------------
@@ -762,6 +886,7 @@ class MetricsEngine:
         self.store = store
         self.procs = ProcessCollector()
         self.logs = CopilotLogTailer(store)
+        self.events = SessionEventTailer(store)
         self._peak_velocity: float = 0.0
         self._started_at: float = time.time()
         self._session_start_times: Dict[str, float] = {}
@@ -811,6 +936,8 @@ class MetricsEngine:
 
         # Log-derived agent launches
         self.logs.poll_new_events()
+        # Session events.jsonl — the primary source of agent launches
+        self.events.poll_new_events()
 
         agent_events_last5m = self.store.agent_events_count_since(ts - 5 * 60)
         spawned_all_time = self.store.total_spawned()
