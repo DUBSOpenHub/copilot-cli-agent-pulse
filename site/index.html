@@ -775,7 +775,7 @@ footer a{color:var(--cyan)}
       <span class="arch-arrow">→<span class="arch-particle" style="animation-delay:0s"></span><span class="arch-particle" style="animation-delay:.6s"></span><span class="arch-particle" style="animation-delay:1.2s"></span></span>
       <div class="arch-box">
         <h4>🗄️ Session Store</h4>
-        <p>DuckDB cloud queries</p>
+        <p>Local file &amp; SQLite scanner</p>
       </div>
       <span class="arch-arrow">→<span class="arch-particle" style="animation-delay:.2s"></span><span class="arch-particle" style="animation-delay:.8s"></span><span class="arch-particle" style="animation-delay:1.4s"></span></span>
       <div class="arch-box">
@@ -815,8 +815,8 @@ footer a{color:var(--cyan)}
         <div class="install-line"><span class="comment"># Install dependencies</span></div>
         <div class="install-line install-line-wrap"><span class="prompt">$ </span><span class="cmd">pip install -r requirements.txt</span><button class="copy-btn" data-cmd="pip install -r requirements.txt">COPY</button></div>
         <div class="install-line">&nbsp;</div>
-        <div class="install-line"><span class="comment"># Launch the live dashboard</span></div>
-        <div class="install-line install-line-wrap"><span class="prompt">$ </span><span class="cmd">python agent_pulse.py --live</span><button class="copy-btn" data-cmd="python agent_pulse.py --live">COPY</button></div>
+        <div class="install-line"><span class="comment"># Launch the dashboard</span></div>
+        <div class="install-line install-line-wrap"><span class="prompt">$ </span><span class="cmd">agentpulse</span><button class="copy-btn" data-cmd="agentpulse">COPY</button></div>
       </div>
     </div>
   </div>
@@ -1053,10 +1053,11 @@ footer a{color:var(--cyan)}
     const typeClsMap={'explore':'t-cyan','task':'t-yellow','code-review':'t-pink','general-purpose':'t-green','rubber-duck':'t-orange'};
     let html='';
 
-    // Banner — white ASCII art
+    // Banner — white ASCII art (matches real dashboard)
     bannerLines.forEach(function(l){
       html+='<div class="term-line"><span class="t-white t-bold">'+l+'</span></div>';
     });
+    html+='<div class="term-line" style="text-align:center"><span class="t-white t-bold">Agent Dashboard for the Copilot CLI</span></div>';
 
     html+='<div class="term-line" style="text-align:center"><span class="t-pink t-bold">⚡ for GitHub Copilot CLI</span></div>';
     html+='<div class="term-line">  <span id="heartEl">'+heartbeats[heartIdx]+'</span>  <span class="t-dim">monitoring</span> <span class="t-green t-bold">'+agents+'</span> <span class="t-dim">agents across</span> <span class="t-cyan t-bold">'+sessions+'</span> <span class="t-dim">active sessions</span></div>';
@@ -1181,32 +1182,68 @@ footer a{color:var(--cyan)}
 
   function typeBanner(onDone){
     termBody.innerHTML='';
-    const bannerDiv=document.createElement('div');
-    bannerDiv.id='bannerArea';
-    termBody.appendChild(bannerDiv);
-    let lineIdx=0,charIdx=0;
-    function tick(){
-      if(lineIdx>=bannerLines.length){
-        bannerTyped=true;
-        onDone();
+    const bootDiv=document.createElement('div');
+    bootDiv.id='bannerArea';
+    termBody.appendChild(bootDiv);
+
+    // Instant banner (white, like real dashboard)
+    let bHtml='';
+    bannerLines.forEach(function(l){
+      bHtml+='<div class="term-line" style="opacity:1"><span class="t-white t-bold">'+l+'</span></div>';
+    });
+    bHtml+='<div class="term-line" style="opacity:1;text-align:center"><span class="t-white t-bold">Agent Dashboard for the Copilot CLI</span></div>';
+    bHtml+='<div class="term-line">&nbsp;</div>';
+    bootDiv.innerHTML=bHtml;
+
+    // Braille spinner boot stages (matches real dashboard)
+    const braille='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+    const stages=[
+      {label:'Scanning processes',         dur:800,  color:'#00f5ff'},
+      {label:'Connecting to session store', dur:900,  color:'#00ff87'},
+      {label:'Loading agent registry',     dur:900,  color:'#ff00ff'},
+      {label:'Mapping active sessions',    dur:1000, color:'#ffd75f'},
+      {label:'Rendering dashboard',        dur:700,  color:'#bf7fff'},
+    ];
+    let stageIdx=0;
+    const stageArea=document.createElement('div');
+    bootDiv.appendChild(stageArea);
+
+    function runStage(){
+      if(stageIdx>=stages.length){
+        // Show ONLINE then transition to dashboard
+        const onlineDiv=document.createElement('div');
+        onlineDiv.className='term-line';
+        onlineDiv.style.opacity='1';
+        onlineDiv.style.textAlign='center';
+        onlineDiv.innerHTML='<span style="color:#00ff87;font-weight:bold">  ◉ ONLINE</span>';
+        stageArea.appendChild(onlineDiv);
+        setTimeout(function(){
+          bannerTyped=true;
+          onDone();
+        },400);
         return;
       }
-      const line=bannerLines[lineIdx];
-      if(charIdx<=line.length){
-        let bHtml='';
-        for(let i=0;i<lineIdx;i++){
-          bHtml+='<div class="term-line" style="opacity:1"><span class="t-cyan t-bold">'+bannerLines[i]+'</span></div>';
-        }
-        bHtml+='<div class="term-line" style="opacity:1"><span class="t-cyan t-bold">'+line.substring(0,charIdx)+'</span><span class="typing-cursor"></span></div>';
-        bannerDiv.innerHTML=bHtml;
-        charIdx++;
-        setTimeout(tick,4);
-      } else {
-        lineIdx++;charIdx=0;
-        setTimeout(tick,20);
-      }
+      const s=stages[stageIdx];
+      const spinLine=document.createElement('div');
+      spinLine.className='term-line';
+      spinLine.style.opacity='1';
+      spinLine.style.textAlign='center';
+      stageArea.appendChild(spinLine);
+
+      let frame=0;
+      const spinInterval=setInterval(function(){
+        spinLine.innerHTML='<span style="color:'+s.color+';font-weight:bold">'+braille[frame%braille.length]+' '+s.label+'</span>';
+        frame++;
+      },80);
+
+      setTimeout(function(){
+        clearInterval(spinInterval);
+        spinLine.innerHTML='<span style="color:'+s.color+';font-weight:bold">  ✓ '+s.label+'</span>';
+        stageIdx++;
+        runStage();
+      },s.dur);
     }
-    tick();
+    runStage();
   }
 
   function afterRender(sessions,agents,velocity,today){

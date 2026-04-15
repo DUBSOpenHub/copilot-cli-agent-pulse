@@ -2,37 +2,26 @@
 
 **Real-time agent tracking dashboard for the GitHub Copilot CLI**
 
-### 🚀 Launch it
+🌐 **[Learn more on the website →](https://dubsopenhub.github.io/copilot-cli-agent-pulse/)**
+
+### 🚀 Install & Launch
 
 ```bash
-agentpulse
+curl -fsSL https://raw.githubusercontent.com/DUBSOpenHub/copilot-cli-agent-pulse/main/quickstart.sh | bash
 ```
 
-> That's it. One word. The dashboard opens in a new terminal window automatically.
+Then just type `agentpulse` — the dashboard opens in a new terminal window automatically.
 
 <div align="center">
 
-[![Agent Pulse](https://img.shields.io/badge/Agent-Pulse-00f5ff?style=for-the-badge&logo=github&logoColor=white)](https://dubsopenhub.github.io/copilot-cli-agent-pulse/)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-00ff87?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Copilot CLI](https://img.shields.io/badge/Copilot-CLI-ff00ff?style=for-the-badge&logo=github&logoColor=white)](https://githubnext.com/projects/copilot-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-ffd75f?style=for-the-badge)](LICENSE)
 
-🌐 **[Live Demo Site](https://dubsopenhub.github.io/copilot-cli-agent-pulse/)** · 📦 **[Quick Start](#-quick-start)** · 📖 **[Docs](#-modes)**
-
 </div>
-
-> ### ⚡ One Command. That's It.
->
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/DUBSOpenHub/copilot-cli-agent-pulse/main/quickstart.sh | bash
-> ```
-> Then type: `agentpulse` — the dashboard opens automatically in a new terminal window.
-
----
 
 <div align="center">
 <img src="assets/dashboard-screenshot.svg" alt="Agent Pulse Dashboard" width="700">
-<br><em>Live dashboard tracking sessions, agents, velocity, and more — <a href="https://dubsopenhub.github.io/copilot-cli-agent-pulse/">see it live</a></em>
 </div>
 
 ---
