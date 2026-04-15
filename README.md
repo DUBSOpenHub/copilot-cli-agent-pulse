@@ -2,9 +2,13 @@
 
 **Real-time agent tracking dashboard for the GitHub Copilot CLI**
 
+### 🚀 Launch it
+
 ```bash
-python agent_pulse.py --live
+agentpulse
 ```
+
+> That's it. One word. The dashboard opens in a new terminal window automatically.
 
 <div align="center">
 
