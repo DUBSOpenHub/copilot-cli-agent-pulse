@@ -107,7 +107,9 @@ BANNER_ART = r"""
    |_|_| \___||___|_|\_| |_|   |_|   \___/|____|___/___|
 """
 
-BANNER_COMPACT = "  ⚡ Agent Pulse  ·  powered by GitHub Copilot CLI"
+BANNER_SUBTITLE = "Agent Dashboard for the Copilot CLI"
+
+BANNER_COMPACT = "  ⚡ Agent Pulse  ·  Agent Dashboard for the Copilot CLI"
 
 # ─── Dashboard start time (from A — for uptime tracking) ─────────────────────
 _DASHBOARD_START = datetime.datetime.now()
@@ -813,7 +815,8 @@ def make_banner(tick: int = 0, stats: dict | None = None, force_compact: bool = 
             return Panel(Align.center(content), border_style=border, box=box.HEAVY, padding=(0, 1))
 
         # Full banner with original ASCII art
-        banner_text = Text(BANNER_ART, style=f"bold {C_NEON_CYAN}", justify="center")
+        banner_text = Text(BANNER_ART, style="bold white", justify="center")
+        subtitle_text = Text(BANNER_SUBTITLE, style=f"bold {C_NEON_CYAN}", justify="center")
         wave = pulse_wave(offset=tick, width=50)
         wave_text = Text(wave, style=C_NEON_CYAN, justify="center")
 
@@ -827,7 +830,7 @@ def make_banner(tick: int = 0, stats: dict | None = None, force_compact: bool = 
         info_line.append(f"  ·  {date_str}  {now_str}", style=f"dim {C_NEON_CYAN}")
         info_line.append(f"  ·  ⏱ uptime {uptime}", style=C_DIM)
 
-        content = Text.assemble(banner_text, "\n", wave_text, "\n", title_line, "\n", info_line)
+        content = Text.assemble(banner_text, "\n", subtitle_text, "\n\n", wave_text, "\n", title_line, "\n", info_line)
         return Panel(Align.center(content), border_style=border, box=box.HEAVY, padding=(0, 2))
     except Exception:
         return Panel(Text("⚡ Agent Pulse", style=f"bold {C_NEON_CYAN}"), border_style=C_NEON_CYAN, box=box.HEAVY)
@@ -1351,8 +1354,13 @@ def mode_snapshot() -> None:
         return
 
     console.print()
-    console.print(Panel(
+    banner_content = Text.assemble(
         Text(BANNER_ART, style=f"bold {C_NEON_CYAN}", justify="center"),
+        "\n",
+        Text(BANNER_SUBTITLE, style=f"bold white", justify="center"),
+    )
+    console.print(Panel(
+        Align.center(banner_content),
         box=box.DOUBLE_EDGE,
         border_style=C_NEON_CYAN,
         padding=(0, 2),
