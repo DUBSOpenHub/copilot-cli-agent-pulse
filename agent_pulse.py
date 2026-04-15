@@ -1322,83 +1322,45 @@ def build_live_layout(stats: dict, tick: int, refresh: int = 5, force_compact: b
 # ─── Startup splash ──────────────────────────────────────────────────────────
 
 def _show_startup_splash(console: Console) -> None:
-    """Cyberpunk boot sequence with dramatic reveal."""
-    term_w = console.width or 120
-
+    """Clean boot sequence with braille spinners."""
     console.clear()
     console.print()
 
-    # Phase 1: glitch scanlines
-    scanline = "─" * min(term_w - 4, 80)
-    for i in range(3):
-        color = ["#003333", "#006666", C_NEON_CYAN][i]
-        console.print(Align.center(Text(scanline, style=f"dim {color}")))
-        time.sleep(0.04)
-
+    # Banner — instant, no animation
+    for line in BANNER_ART.strip("\n").split("\n"):
+        console.print(Align.center(Text(line, style=f"bold {C_NEON_CYAN}")))
+    console.print(Align.center(Text(BANNER_SUBTITLE, style=f"bold {C_NEON_CYAN}")))
     console.print()
 
-    # Phase 2: banner reveal with color gradient (dim → bright)
-    banner_lines = BANNER_ART.strip("\n").split("\n")
-    gradient = ["#336666", "#44aaaa", "#00cccc", C_NEON_CYAN]
-    for i, line in enumerate(banner_lines):
-        color = gradient[min(i, len(gradient) - 1)]
-        console.print(Align.center(Text(line, style=f"bold {color}")))
-        time.sleep(0.07)
-
-    # Phase 3: subtitle materializes
-    time.sleep(0.1)
-    subtitle = BANNER_SUBTITLE
-    # Type it out character by character (fast)
-    partial = ""
-    cursor = "█"
-    for ch in subtitle:
-        partial += ch
-        line = Text(justify="center")
-        line.append(partial, style=f"bold {C_NEON_CYAN}")
-        line.append(cursor, style=f"bold {C_NEON_GREEN}")
-        console.print(Align.center(line), end="\r")
-        time.sleep(0.02)
-    # Final subtitle without cursor
-    console.print(Align.center(Text(subtitle, style=f"bold {C_NEON_CYAN}")))
-
-    console.print()
-
-    # Phase 4: system boot log
-    boot_steps = [
-        ("SYS",  "Initializing Agent Pulse v2.0",  C_NEON_CYAN),
-        ("SCAN", "Detecting Copilot CLI processes", C_NEON_GREEN),
-        ("DB",   "Connecting to session store",     C_WARN),
-        ("AGNT", "Loading agent registry",          C_NEON_PINK),
-        ("NET",  "Mapping active sessions",         C_NEON_CYAN),
-        ("DASH", "Rendering dashboard",             C_NEON_GREEN),
+    # Boot stages with braille spinner
+    stages = [
+        ("Scanning processes",         0.25),
+        ("Connecting to session store", 0.20),
+        ("Loading agent registry",     0.20),
+        ("Mapping active sessions",    0.25),
+        ("Rendering dashboard",        0.15),
     ]
-    for tag, msg, color in boot_steps:
-        line = Text(justify="center")
-        line.append(f"  [{tag}]", style=f"bold {C_MUTED}")
-        line.append(f"  {msg}", style=f"{color}")
-        dots = " ··· "
-        line.append(dots, style=f"dim {C_DIM}")
-        line.append("OK", style=f"bold {C_NEON_GREEN}")
-        console.print(Align.center(line))
-        time.sleep(0.1)
-
-    console.print()
-
-    # Phase 5: pulse wave burst + ONLINE
-    wave_chars = "▁▂▃▄▅▆▇█▇▆▅▄▃▂▁"
-    for width in [20, 35, 50]:
-        wave = (wave_chars * 5)[:width]
-        console.print(Align.center(Text(wave, style=f"bold {C_NEON_CYAN}")), end="\r")
-        time.sleep(0.08)
-    console.print(Align.center(Text((wave_chars * 5)[:50], style=f"bold {C_NEON_CYAN}")))
+    braille = HEARTBEAT_BRAILLE  # ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏
+    for label, duration in stages:
+        frames = max(3, int(duration / 0.05))
+        for i in range(frames):
+            spin = braille[i % len(braille)]
+            line = Text(justify="center")
+            line.append(f"  {spin} ", style=f"bold {C_NEON_CYAN}")
+            line.append(label, style=C_DIM)
+            console.print(Align.center(line), end="\r")
+            time.sleep(0.05)
+        done = Text(justify="center")
+        done.append("  ✓ ", style=f"bold {C_NEON_GREEN}")
+        done.append(label, style=f"{C_NEON_GREEN}")
+        console.print(Align.center(done))
 
     console.print()
     online = Text(justify="center")
     online.append("  ◉ ", style=f"bold {C_NEON_GREEN}")
     online.append("ONLINE", style=f"bold {C_NEON_GREEN}")
-    online.append("  ·  Dashboard ready", style=f"dim {C_NEON_CYAN}")
     console.print(Align.center(online))
-    time.sleep(0.4)
+    time.sleep(0.3)
 
 
 # ─── Modes ────────────────────────────────────────────────────────────────────
