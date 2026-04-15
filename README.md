@@ -28,7 +28,7 @@ Then just type `agentpulse` — the dashboard opens in a new terminal window aut
 
 ## 🌟 Overview
 
-Agent Pulse is a **cyberpunk-themed, real-time terminal dashboard** that monitors your GitHub Copilot CLI sessions, agents, and activity. Built with Python and [Rich](https://github.com/Textualize/rich), it gives you full observability into your AI-powered development workflow.
+Agent Pulse is a **cyberpunk-themed, real-time terminal dashboard** that monitors your GitHub Copilot CLI sessions, agents, and activity. Built with Python, [Textual](https://github.com/Textualize/textual), and [Rich](https://github.com/Textualize/rich), it gives you full observability into your AI-powered development workflow.
 
 ### ✨ Features
 
@@ -81,20 +81,16 @@ Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the li
 
 | Mode | Command | Description |
 |------|---------|-------------|
-| **Snapshot** | `python agent_pulse.py` | One-shot view of current state |
-| **Live** | `python agent_pulse.py --live` | Persistent dashboard with real-time updates |
-| **History** | `python agent_pulse.py --history` | Historical stats and trends |
+| **Live** | `python agent_pulse.py` | Launch the live Textual dashboard (default) |
 | **Export** | `python agent_pulse.py --export` | JSON export to stdout |
-| **Compact** | `python agent_pulse.py --compact` | Force compact layout mode |
+| **No Splash** | `python agent_pulse.py --no-splash` | Skip boot animation |
 
 ### Options
 
 ```
---live,    -l          Persistent live dashboard
---history, -H          Show historical stats
---export,  -e          Export JSON to stdout
---compact, -c          Force compact mode
---refresh, -r INT      Live refresh interval in seconds (default: 5)
+--export,    -e          Export JSON to stdout
+--no-splash              Skip boot animation
+--version,   -v          Show version number
 ```
 
 ---
@@ -121,8 +117,8 @@ Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the li
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Rich Live Terminal                             │
-│  Banner │ Metrics │ Sessions │ Agents │ Trends │ Installed │ Footer │
+│                      Textual App (TUI)                                │
+│  Banner │ Metrics │ Sessions │ Agents │ Health │ Models │ Tokens      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -149,7 +145,15 @@ Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the li
 - Active sessions, processes, and 24h agent count
 - Gradient bar charts (green → yellow → red)
 - Peak concurrent, agent velocity, last agent launched
-- 24h activity heatmap
+
+### Heatmap + Signal
+- 24h activity heatmap with `░▒▓█` density blocks
+- Real-time session and launch sparklines (rolling 4-min window)
+
+### Trend Analysis
+- 7-day daily breakdown with gradient bars
+- 14-day sparklines with trend arrows (↑↓→)
+- Session and agent counts side-by-side
 
 ### Agent Breakdown
 - Stacked distribution bar by agent type
@@ -157,10 +161,26 @@ Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the li
 - Gradient share bars per type
 - Skill invocation tracking
 
-### Trends
-- 7-day daily breakdown with gradient bars
-- 14-day sparklines with trend arrows (↑↓→)
-- Session and agent counts side-by-side
+### Active Sessions
+- Live table of running Copilot CLI sessions
+- Session ID, PID, agent type, status, and runtime
+
+### Installed Agents
+- Auto-discovered agent registry from `~/.copilot/agents/`
+- Icon, name, and description for each agent
+
+### Fleet Health
+- Health score gauge (0–100) with status label (Excellent / Good / Warning / Critical)
+- 24h success rate and error count
+- Pulsing monitor indicator
+
+### Model Distribution
+- 24h breakdown of AI models used across agent launches
+- Per-model count, percentage, and gradient bar
+
+### Token Usage
+- 24h token consumption with estimated cost
+- Hourly token sparkline
 
 ---
 
@@ -169,11 +189,14 @@ Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the li
 ```
 copilot-cli-agent-pulse/
 ├── agent_pulse.py           # Main dashboard application
+├── agent_pulse.tcss         # Textual CSS stylesheet
 ├── pyproject.toml            # Python packaging + entry point
-├── requirements.txt          # Python dependencies
+├── requirements.txt          # Python dependencies (rich, textual)
 ├── start.sh                  # Launcher (auto-opens in new terminal window)
+├── quickstart.sh             # One-command installer
 ├── site/                     # Showcase website (GitHub Pages)
 │   └── index.html
+├── assets/                   # Screenshots and images
 ├── experimental/
 │   └── ink/                  # React/Ink TUI (experimental)
 │       ├── src/

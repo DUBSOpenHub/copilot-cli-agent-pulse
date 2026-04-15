@@ -27,8 +27,8 @@ Screen {
 }
 
 #mid_grid {
-  grid-size: 2;
-  grid-columns: 1fr 1fr;
+  grid-size: 3;
+  grid-columns: 1fr 1fr 1fr;
   grid-rows: auto;
   grid-gutter: 1;
   margin: 0 2;

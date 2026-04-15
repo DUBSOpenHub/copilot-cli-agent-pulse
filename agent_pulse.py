@@ -1490,6 +1490,7 @@ class AgentPulseApp(App):
             Grid(
                 MixPanel(id="mix"),
                 ModelDistPanel(id="model_dist"),
+                TokenUsagePanel(self.store, id="token_usage"),
                 id="mid_grid",
             ),
             Grid(
@@ -1513,6 +1514,7 @@ class AgentPulseApp(App):
         self.history = self.query_one("#history", HistoryPanel)
         self.mix = self.query_one("#mix", MixPanel)
         self.model_dist = self.query_one("#model_dist", ModelDistPanel)
+        self.token_usage = self.query_one("#token_usage", TokenUsagePanel)
         self.sessions_panel = self.query_one("#sessions", ActiveSessionsPanel)
         self.recent_title = self.query_one("#recent_title", GlowTitle)
         self.recent = self.query_one("#recent", RecentTable)
@@ -1607,6 +1609,7 @@ class AgentPulseApp(App):
         self.history.metrics = m
         self.mix.metrics = m
         self.model_dist.metrics = m
+        self.token_usage.metrics = m
         self.sessions_panel.metrics = m
         self.recent.update_rows(m.recent_events)
 
