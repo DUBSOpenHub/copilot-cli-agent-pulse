@@ -339,12 +339,28 @@ class CopilotLogTailer:
 
                     name = None
                     model = None
+                    # Try "name": "value" first, then "description": "value"
                     m_name = re.search(r"\bname\b\s*[:=]\s*\"([^\"]{1,80})\"", line)
                     if m_name:
                         name = m_name.group(1)
-                    m_model = re.search(r"\bmodel\b\s*[:=]\s*\"([^\"]{1,80})\"", line)
+                    if not name:
+                        m_desc = re.search(r"\bdescription\b\s*[:=]\s*\"([^\"]{1,80})\"", line)
+                        if m_desc:
+                            name = m_desc.group(1)
+                    # Also try unquoted: description: Some Text,
+                    if not name:
+                        m_desc2 = re.search(r"description:\s*([^,\"]{1,80}?)(?:,|\s*$)", line)
+                        if m_desc2:
+                            name = m_desc2.group(1).strip()
+
+                    # Try "model": "value" at data level and also model: value in text
+                    m_model = re.search(r"\"model\"\s*:\s*\"([^\"]{1,80})\"", line)
                     if m_model:
                         model = m_model.group(1)
+                    if not model:
+                        m_model2 = re.search(r"\bmodel:\s*([a-zA-Z0-9._-]{2,60})", line)
+                        if m_model2:
+                            model = m_model2.group(1)
 
                     # Feature 1: Detect outcome
                     outcome = "unknown"
@@ -783,7 +799,13 @@ class MetricsEngine:
             if self.procs.is_agentish_process(p.cmd):
                 running_agents_est += 1
                 if self.store.maybe_record_agent_pid(p.pid, ts, p.cmd):
-                    self.store.insert_agent_events([AgentEvent(ts=ts, agent_type="unknown", source=f"ps:{p.pid}")])
+                    # Try to extract agent type from command line
+                    ps_agent_type = "unknown"
+                    for t in AGENT_TYPES:
+                        if t in p.cmd.lower():
+                            ps_agent_type = t
+                            break
+                    self.store.insert_agent_events([AgentEvent(ts=ts, agent_type=ps_agent_type, source=f"ps:{p.pid}")])
 
         active_sessions = len(sessions_by_tty)
 
