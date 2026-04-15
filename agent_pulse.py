@@ -1357,7 +1357,7 @@ def mode_snapshot() -> None:
     banner_content = Text.assemble(
         Text(BANNER_ART, style=f"bold {C_NEON_CYAN}", justify="center"),
         "\n",
-        Text(BANNER_SUBTITLE, style=f"bold white", justify="center"),
+        Text(BANNER_SUBTITLE, style=f"bold {C_NEON_CYAN}", justify="center"),
     )
     console.print(Panel(
         Align.center(banner_content),
