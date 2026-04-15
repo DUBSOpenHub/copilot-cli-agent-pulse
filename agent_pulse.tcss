@@ -2,10 +2,12 @@
 
 Screen {
   background: #06070a;
+  overflow-y: auto;
 }
 
 #root {
-  height: 100%;
+  height: auto;
+  min-height: 100%;
   width: 100%;
 }
 
@@ -15,15 +17,16 @@ Screen {
 }
 
 #top_grid {
-  grid-size: 4;
-  grid-columns: 1fr 1fr 1fr 1fr;
-  grid-rows: auto;
+  grid-size: 2;
+  grid-columns: 1fr 1fr;
+  grid-rows: auto auto;
   grid-gutter: 1;
   margin: 0 2;
 }
 
 #stats, #history, #mix, #signal, #health, #model_dist, #sessions, #installed {
   height: auto;
+  min-width: 40;
 }
 
 #mid_grid {
@@ -47,6 +50,7 @@ Screen {
   padding: 1 1;
   border: round #00F5D4;
   background: #0b0f14;
+  height: auto;
 }
 
 #recent_title {
@@ -55,7 +59,7 @@ Screen {
 }
 
 #recent {
-  height: 1fr;
+  height: auto;
   min-height: 8;
 }
 

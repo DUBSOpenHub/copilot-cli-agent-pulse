@@ -58,8 +58,8 @@ cd copilot-cli-agent-pulse
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-# Launch the live dashboard
-.venv/bin/python agent_pulse.py --live
+# Launch the dashboard
+agentpulse
 ```
 
 That's it. The dashboard auto-detects your Copilot CLI sessions and starts monitoring.
@@ -118,7 +118,7 @@ Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the li
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      Textual App (TUI)                                │
-│  Banner │ Metrics │ Sessions │ Agents │ Health │ Models │ Tokens      │
+│  Banner │ Metrics │ Sessions │ Agents │ Health │ Models                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
