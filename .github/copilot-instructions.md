@@ -6,7 +6,7 @@
 agent_pulse.py          — Main dashboard (single-file, ~1500 lines Python/Rich)
 pyproject.toml          — Python packaging + console entry point
 requirements.txt        — Python deps (rich>=13.0.0)
-start.sh                — Quick launcher
+start.sh                — Launcher (auto-opens in a new terminal window)
 site/index.html         — Showcase website (GitHub Pages)
 experimental/ink/       — React/Ink TUI (experimental, separate stack)
 ```

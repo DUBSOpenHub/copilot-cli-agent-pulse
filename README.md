@@ -2,6 +2,10 @@
 
 **Real-time agent tracking dashboard for the GitHub Copilot CLI**
 
+```bash
+python agent_pulse.py --live
+```
+
 <div align="center">
 
 [![Agent Pulse](https://img.shields.io/badge/Agent-Pulse-00f5ff?style=for-the-badge&logo=github&logoColor=white)](https://dubsopenhub.github.io/copilot-cli-agent-pulse/)
@@ -18,7 +22,7 @@
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/DUBSOpenHub/copilot-cli-agent-pulse/main/quickstart.sh | bash
 > ```
-> Then run: `python3 ~/copilot-cli-agent-pulse/agent_pulse.py --live`
+> Then type: `agentpulse` — the dashboard opens automatically in a new terminal window.
 
 ---
 
@@ -57,14 +61,26 @@ Agent Pulse is a **cyberpunk-themed, real-time terminal dashboard** that monitor
 git clone https://github.com/DUBSOpenHub/copilot-cli-agent-pulse.git
 cd copilot-cli-agent-pulse
 
-# Install dependencies
-pip install -r requirements.txt
+# Create a virtual environment and install dependencies
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 
 # Launch the live dashboard
-python agent_pulse.py --live
+.venv/bin/python agent_pulse.py --live
 ```
 
 That's it. The dashboard auto-detects your Copilot CLI sessions and starts monitoring.
+
+### Shell Commands
+
+Add these aliases to your `~/.zshrc` or `~/.bashrc`:
+
+```bash
+alias agentpulse='~/copilot-cli-agent-pulse/start.sh'
+alias agentdashboard='~/copilot-cli-agent-pulse/start.sh'
+```
+
+Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the live dashboard **automatically opens in a new terminal window** so it never blocks your current session.
 
 ---
 
@@ -162,7 +178,7 @@ copilot-cli-agent-pulse/
 ├── agent_pulse.py           # Main dashboard application
 ├── pyproject.toml            # Python packaging + entry point
 ├── requirements.txt          # Python dependencies
-├── start.sh                  # Quick launcher script
+├── start.sh                  # Launcher (auto-opens in new terminal window)
 ├── site/                     # Showcase website (GitHub Pages)
 │   └── index.html
 ├── experimental/

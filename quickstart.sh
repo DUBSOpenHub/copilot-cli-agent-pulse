@@ -20,16 +20,43 @@ else
   cd "$DEST"
 fi
 
-# Install Python deps
-echo "  🐍 Installing dependencies..."
-pip install --quiet -r requirements.txt 2>/dev/null || pip3 install --quiet -r requirements.txt
+# Create/reuse virtual environment and install deps
+VENV="$DEST/.venv"
+if [ ! -d "$VENV" ]; then
+  echo "  🐍 Creating virtual environment..."
+  python3 -m venv "$VENV"
+fi
+
+echo "  📦 Installing dependencies..."
+"$VENV/bin/pip" install --quiet -r requirements.txt
 
 echo ""
 echo "  ✅ Installed to $DEST"
 echo ""
-echo "  Run it:"
-echo "    python3 $DEST/agent_pulse.py --live"
+
+# Auto-add shell aliases if not already present
+SHELL_RC=""
+if [ -f "$HOME/.zshrc" ]; then
+  SHELL_RC="$HOME/.zshrc"
+elif [ -f "$HOME/.bashrc" ]; then
+  SHELL_RC="$HOME/.bashrc"
+fi
+
+if [ -n "$SHELL_RC" ] && ! grep -q 'alias agentpulse=' "$SHELL_RC" 2>/dev/null; then
+  echo "" >> "$SHELL_RC"
+  echo "# Agent Pulse — auto-opens live dashboard in a new terminal window" >> "$SHELL_RC"
+  echo "alias agentpulse='~/copilot-cli-agent-pulse/start.sh'" >> "$SHELL_RC"
+  echo "alias agentdashboard='~/copilot-cli-agent-pulse/start.sh'" >> "$SHELL_RC"
+  echo "  🔗 Added 'agentpulse' and 'agentdashboard' aliases to $(basename "$SHELL_RC")"
+else
+  echo "  🔗 Aliases already configured."
+fi
+
 echo ""
-echo "  Or use the launcher:"
+echo "  Launch it (opens in a new terminal window):"
+echo "    agentpulse"
+echo "    agentdashboard"
+echo ""
+echo "  Or run directly:"
 echo "    $DEST/start.sh"
 echo ""
