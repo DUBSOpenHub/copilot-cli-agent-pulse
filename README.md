@@ -11,6 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/DUBSOpenHub/copilot-cli-agent-pulse
 ```
 
 Then just type `agentpulse` — the dashboard opens in a new terminal window automatically.
+Or use `agentpulse --here` to run it in the current terminal instead.
 
 <div align="center">
 
@@ -71,9 +72,12 @@ Add these aliases to your `~/.zshrc` or `~/.bashrc`:
 ```bash
 alias agentpulse='~/copilot-cli-agent-pulse/start.sh'
 alias agentdashboard='~/copilot-cli-agent-pulse/start.sh'
+alias agentpulse-here='~/copilot-cli-agent-pulse/start.sh --here'
 ```
 
 Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the live dashboard **automatically opens in a new terminal window** so it never blocks your current session.
+
+Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboard **in the current terminal** instead.
 
 ---
 
@@ -85,7 +89,13 @@ Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the li
 | **Export** | `python agent_pulse.py --export` | JSON export to stdout |
 | **No Splash** | `python agent_pulse.py --no-splash` | Skip boot animation |
 
-### Options
+### Launcher Options
+
+| Flag | Description |
+|------|-------------|
+| `--here` | Run in the current terminal instead of opening a new window |
+
+### Dashboard Options
 
 ```
 --export,    -e          Export JSON to stdout
