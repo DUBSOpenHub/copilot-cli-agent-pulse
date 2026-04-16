@@ -1817,7 +1817,7 @@ class AgentPulseApp(App):
         self.store.close()
 
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
