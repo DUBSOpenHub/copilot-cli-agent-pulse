@@ -21,12 +21,13 @@ Screen {
   grid-columns: 1fr 1fr;
   grid-rows: auto;
   grid-gutter: 1;
+  height: auto;
   margin: 0 2;
 }
 
 #stats, #history, #mix, #signal, #health, #model_dist, #sessions, #installed {
-  height: auto;
-  min-width: 40;
+  height: 100%;
+  min-width: 36;
 }
 
 #recent_box {

@@ -3,10 +3,12 @@
 ## File Map
 
 ```
-agent_pulse.py          — Main dashboard (single-file, ~1500 lines Python/Rich)
+agent_pulse.py          — Main dashboard (single-file, Python/Textual/Rich)
+agent_pulse.tcss        — Textual CSS stylesheet (responsive layout)
 pyproject.toml          — Python packaging + console entry point
-requirements.txt        — Python deps (rich>=13.0.0)
+requirements.txt        — Python deps (rich>=13.0.0, textual>=0.50.0)
 start.sh                — Launcher (auto-opens in a new terminal window)
+quickstart.sh           — One-command installer
 site/index.html         — Showcase website (GitHub Pages)
 experimental/ink/       — React/Ink TUI (experimental, separate stack)
 ```
@@ -14,12 +16,12 @@ experimental/ink/       — React/Ink TUI (experimental, separate stack)
 ## Non-Negotiables
 
 1. **Single-file architecture** — `agent_pulse.py` is the entire app. Do not split into modules.
-2. **Rich-only dependency** — No new Python deps without explicit approval.
+2. **Rich + Textual only** — No new Python deps without explicit approval.
 3. **Every panel wrapped in try/except** — Broken panels must not crash the dashboard.
 4. **DB lock resilience** — Always `sqlite3.connect(timeout=5)` and catch `OperationalError`.
-5. **3-tier responsive** — Full ≥100w/40h, Compact ≥80w, Micro <80w/<24h.
+5. **Responsive layout** — 2-column ≥100w, 1-column <100w, compact logo on narrow terminals.
 6. **Python 3.10+ syntax** — `str | None`, `list[int]`, etc.
-7. **CLI flag stability** — `--live`, `--history`, `--export`, `--compact`, `--refresh` are public API.
+7. **CLI flag stability** — `--export`, `--no-splash`, `--version` are public API.
 
 ## PR Requirements
 

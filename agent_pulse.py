@@ -27,6 +27,7 @@ import re
 import sqlite3
 import subprocess
 import time
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,6 +57,8 @@ ASCII_LOGO = r"""
 /_/   \_\__, |\___|_| |_|\__| |_|    \__,_|_|___/\___|
         |___/
 """.rstrip("\n")
+
+ASCII_LOGO_COMPACT = "⚡ AGENT PULSE"
 
 AGENT_TYPES = (
     "task",
@@ -379,6 +382,29 @@ class SessionEventTailer:
         dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return dirs[:limit]
 
+    @staticmethod
+    def _detect_session_model(text: str) -> str | None:
+        """Extract the session-level model from model_change or execution_complete events."""
+        session_model: str | None = None
+        for line in text.splitlines():
+            if "model" not in line:
+                continue
+            try:
+                data = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            ev_type = data.get("type", "")
+            dd = data.get("data", {})
+            if not isinstance(dd, dict):
+                continue
+            if ev_type == "session.model_change":
+                session_model = dd.get("newModel") or session_model
+            elif ev_type == "tool.execution_complete":
+                m = dd.get("model")
+                if m:
+                    session_model = m
+        return session_model
+
     def poll_new_events(self) -> List[AgentEvent]:
         out: List[AgentEvent] = []
         for d in self._candidate_dirs():
@@ -402,9 +428,15 @@ class SessionEventTailer:
                 text = chunk.decode("utf-8", errors="replace")
                 base_source = f"evt:{d.name}:{last_off}"
 
+                # Detect the session-level model to use as fallback
+                session_model = self._detect_session_model(text)
+
+                # Two-pass approach:
+                # Pass 1: collect agent starts keyed by toolCallId
+                # Pass 2: correlate execution_complete outcomes back to starts
+                agent_starts: dict[str, int] = {}  # toolCallId -> index in out
+
                 for i, line in enumerate(text.splitlines()):
-                    if "agent_type" not in line:
-                        continue
                     try:
                         data = json.loads(line)
                     except (json.JSONDecodeError, ValueError):
@@ -415,9 +447,19 @@ class SessionEventTailer:
                     if not isinstance(dd, dict):
                         continue
 
-                    # Only process execution_start events (have full arguments)
-                    # Skip execution_complete — those only have telemetry agent_type
                     if ev_type == "tool.execution_complete":
+                        # Correlate outcome back to the matching start event
+                        tid = dd.get("toolCallId")
+                        if tid and tid in agent_starts:
+                            idx = agent_starts[tid]
+                            success = dd.get("success")
+                            if success is True:
+                                out[idx] = dataclasses.replace(out[idx], outcome="success")
+                            elif success is False:
+                                out[idx] = dataclasses.replace(out[idx], outcome="failure")
+                        continue
+
+                    if "agent_type" not in line:
                         continue
 
                     agent_type = None
@@ -447,23 +489,13 @@ class SessionEventTailer:
 
                     agent_type = agent_type if agent_type in AGENT_TYPES else "custom"
 
+                    # Fall back to session model when no explicit model was passed
+                    if not model and session_model:
+                        model = session_model
+
                     # Use description as name fallback
                     if not name and description:
                         name = description[:80]
-
-                    # Detect outcome
-                    outcome = "unknown"
-                    result = dd.get("result", {})
-                    success = dd.get("success")
-                    if success is True:
-                        outcome = "success"
-                    elif success is False:
-                        outcome = "failure"
-                    elif isinstance(result, dict):
-                        if result.get("success") is True:
-                            outcome = "success"
-                        elif result.get("success") is False:
-                            outcome = "failure"
 
                     # Parse timestamp
                     ts_str = data.get("timestamp") or dd.get("timestamp") or ""
@@ -477,11 +509,17 @@ class SessionEventTailer:
                             pass
 
                     source = f"{base_source}:L{i}"
+                    event_idx = len(out)
                     out.append(AgentEvent(
                         ts=ts, agent_type=agent_type,
                         name=name, model=model,
-                        source=source, outcome=outcome,
+                        source=source, outcome="unknown",
                     ))
+
+                    # Track toolCallId for outcome correlation
+                    tid = dd.get("toolCallId")
+                    if tid:
+                        agent_starts[tid] = event_idx
 
             except Exception:
                 continue
@@ -565,6 +603,17 @@ class PulseStore:
             except sqlite3.OperationalError:
                 pass  # column already exists
 
+        # One-time backfill: reset event file offsets so model/outcome inference can fill gaps
+        null_model_count = self._con.execute(
+            "SELECT COUNT(*) FROM agent_events WHERE model IS NULL"
+        ).fetchone()[0]
+        unknown_outcome_count = self._con.execute(
+            "SELECT COUNT(*) FROM agent_events WHERE outcome = 'unknown'"
+        ).fetchone()[0]
+        if null_model_count > 0 or unknown_outcome_count > 0:
+            self._con.execute("DELETE FROM log_offsets WHERE path LIKE '%events.jsonl'")
+            self._con.commit()
+
     def insert_snapshot(
         self,
         ts: int,
@@ -593,7 +642,21 @@ class PulseStore:
                 )
                 inserted.append(ev)
             except sqlite3.IntegrityError:
-                continue
+                # Row exists; update model and outcome if we now have better data
+                updates = []
+                params: list = []
+                if ev.model:
+                    updates.append("model = CASE WHEN model IS NULL THEN ? ELSE model END")
+                    params.append(ev.model)
+                if ev.outcome and ev.outcome != "unknown":
+                    updates.append("outcome = CASE WHEN outcome = 'unknown' THEN ? ELSE outcome END")
+                    params.append(ev.outcome)
+                if updates:
+                    params.append(ev.source)
+                    cur.execute(
+                        f"UPDATE agent_events SET {', '.join(updates)} WHERE source=?",
+                        params,
+                    )
         self._con.commit()
         return inserted
 
@@ -664,15 +727,28 @@ class PulseStore:
         return out
 
     def hourly_activity_24h(self) -> List[int]:
-        """Return 24 buckets (one per hour) of agent event counts for last 24h."""
+        """Return 24 buckets (one per hour) of combined activity for last 24h.
+
+        Merges agent events and session snapshot activity so the heatmap
+        lights up whenever there was any Copilot CLI usage, not just agent launches.
+        """
         now = now_ts()
         start = now - 24 * 3600
         cur = self._con.cursor()
-        cur.execute("SELECT ts FROM agent_events WHERE ts>=?", (start,))
+
+        # Agent events
         buckets = [0] * 24
+        cur.execute("SELECT ts FROM agent_events WHERE ts>=?", (start,))
         for (ts,) in cur.fetchall():
             hour_idx = min(23, (int(ts) - start) // 3600)
             buckets[hour_idx] += 1
+
+        # Session snapshots (count snapshots with active sessions)
+        cur.execute("SELECT ts, active_sessions FROM snapshots WHERE ts>=? AND active_sessions > 0", (start,))
+        for ts, sessions in cur.fetchall():
+            hour_idx = min(23, (int(ts) - start) // 3600)
+            buckets[hour_idx] += int(sessions)
+
         return buckets
 
     def daily_activity_14d(self) -> List[int]:
@@ -976,7 +1052,15 @@ class NeonLogo(Static):
         self._pid = __import__("os").getpid()
 
     def render(self) -> Panel:
-        logo = Text(ASCII_LOGO, style="bold white")
+        # Use compact logo when terminal is narrow
+        try:
+            width = self.app.size.width
+        except Exception:
+            width = 120
+        if width < 100:
+            logo = Text(ASCII_LOGO_COMPACT, style="bold white")
+        else:
+            logo = Text(ASCII_LOGO, style="bold white")
         tagline = Text("⚡ for GitHub Copilot CLI", style="bold #FF4D6D")
 
         m = self.metrics
@@ -1618,6 +1702,27 @@ class AgentPulseApp(App):
         self.set_interval(0.25, self._tick)
         self.set_interval(1.0, self._poll)
         self._poll()
+        self._apply_responsive_layout()
+
+    def on_resize(self, event) -> None:
+        self._apply_responsive_layout(event.size.width)
+
+    def _apply_responsive_layout(self, width: int | None = None) -> None:
+        """Switch grids between 2-column and 1-column based on terminal width."""
+        if width is None:
+            width = self.size.width
+        narrow = width < 100
+        for grid_id in ("#row1_grid", "#row2_grid", "#row3_grid", "#row4_grid"):
+            try:
+                grid = self.query_one(grid_id, Grid)
+                if narrow:
+                    grid.styles.grid_size_columns = 1
+                    grid.styles.grid_columns = "1fr"
+                else:
+                    grid.styles.grid_size_columns = 2
+                    grid.styles.grid_columns = "1fr 1fr"
+            except Exception:
+                pass
 
     def action_refresh(self) -> None:
         self._poll()
