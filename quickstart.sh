@@ -48,7 +48,7 @@ ALIASES_ADDED=0
 # bash/zsh aliases
 if [ -n "$SHELL_RC" ] && ! grep -q 'alias agentpulse=' "$SHELL_RC" 2>/dev/null; then
   echo "" >> "$SHELL_RC"
-  echo "# Agent Pulse — auto-opens live dashboard in a new terminal window" >> "$SHELL_RC"
+  echo "# Agent Pulse — live terminal dashboard" >> "$SHELL_RC"
   echo "alias agentpulse='~/copilot-cli-agent-pulse/start.sh'" >> "$SHELL_RC"
   echo "alias agentdashboard='~/copilot-cli-agent-pulse/start.sh'" >> "$SHELL_RC"
   echo "  🔗 Added 'agentpulse' and 'agentdashboard' aliases to $(basename "$SHELL_RC")"
@@ -60,7 +60,7 @@ if [ -f "$FISH_CONFIG" ] || echo "$SHELL" | grep -q fish; then
   mkdir -p "$(dirname "$FISH_CONFIG")"
   if ! grep -q 'alias agentpulse' "$FISH_CONFIG" 2>/dev/null; then
     echo "" >> "$FISH_CONFIG"
-    echo "# Agent Pulse — auto-opens live dashboard in a new terminal window" >> "$FISH_CONFIG"
+    echo "# Agent Pulse — live terminal dashboard" >> "$FISH_CONFIG"
     echo "alias agentpulse '~/copilot-cli-agent-pulse/start.sh'" >> "$FISH_CONFIG"
     echo "alias agentdashboard '~/copilot-cli-agent-pulse/start.sh'" >> "$FISH_CONFIG"
     echo "  🔗 Added 'agentpulse' and 'agentdashboard' aliases to config.fish"
@@ -73,7 +73,7 @@ if [ "$ALIASES_ADDED" -eq 0 ]; then
 fi
 
 echo ""
-echo "  Launch it (opens in a new terminal window):"
+echo "  Launch it:"
 echo "    agentpulse"
 echo "    agentdashboard"
 echo ""

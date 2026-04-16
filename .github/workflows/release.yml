@@ -1,0 +1,80 @@
+name: Release & Update Homebrew Formula
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Get release tag
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download source tarball and compute SHA256
+        id: sha
+        run: |
+          TARBALL_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          SHA256=$(curl -sL "$TARBALL_URL" | shasum -a 256 | awk '{print $1}')
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "url=$TARBALL_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Update formula version and SHA256
+        run: |
+          sed -i \
+            -e 's|url "https://github.com/.*/archive/refs/tags/.*\.tar\.gz"|url "${{ steps.sha.outputs.url }}"|' \
+            -e 's|sha256 ".*"|sha256 "${{ steps.sha.outputs.sha256 }}"|' \
+            Formula/agent-pulse.rb
+
+          # Update only the first sha256 (the source tarball, not resource hashes)
+          # The sed above replaced all sha256 lines — restore the resource hashes
+          git checkout -- Formula/agent-pulse.rb
+
+          # Now do a targeted update: only the url and the sha256 on the line after it
+          python3 - <<'PYEOF'
+          import re, sys
+
+          with open("Formula/agent-pulse.rb") as f:
+              content = f.read()
+
+          # Update the source url
+          content = re.sub(
+              r'(  url )"https://github\.com/.*/archive/refs/tags/.*\.tar\.gz"',
+              rf'\1"${{ steps.sha.outputs.url }}"',
+              content,
+              count=1,
+          )
+
+          # Update the source sha256 (the one right after the url line, before license)
+          content = re.sub(
+              r'(  url "https://github\.com/.*\.tar\.gz"\n  )sha256 ".*?"',
+              rf'\g<1>sha256 "${{ steps.sha.outputs.sha256 }}"',
+              content,
+              count=1,
+          )
+
+          with open("Formula/agent-pulse.rb", "w") as f:
+              f.write(content)
+          PYEOF
+
+      - name: Verify formula syntax
+        run: ruby -c Formula/agent-pulse.rb
+
+      - name: Commit and push updated formula
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/agent-pulse.rb
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Update Homebrew formula for ${GITHUB_REF_NAME}
+
+          Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+          git push origin main

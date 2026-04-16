@@ -6,11 +6,20 @@
 
 ### 🚀 Install & Launch
 
+**Homebrew (recommended on macOS):**
+
+```bash
+brew tap DUBSOpenHub/copilot-cli-agent-pulse
+brew install agent-pulse
+```
+
+**Quick installer (any platform):**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DUBSOpenHub/copilot-cli-agent-pulse/main/quickstart.sh | bash
 ```
 
-Then just type `agentpulse` — the dashboard opens in a new terminal window automatically.
+Then just type `agentpulse` or `agent-pulse` to launch the dashboard. Add `--new-window` to open it in a separate window of your current terminal emulator.
 
 <div align="center">
 
@@ -73,7 +82,7 @@ alias agentpulse='~/copilot-cli-agent-pulse/start.sh'
 alias agentdashboard='~/copilot-cli-agent-pulse/start.sh'
 ```
 
-Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the live dashboard **automatically opens in a new terminal window** so it never blocks your current session.
+Then just type **`agentpulse`** or **`agentdashboard`** from anywhere to launch the dashboard in your current terminal. Use **`--new-window`** to open it in a separate window — it auto-detects your terminal emulator (Ghostty, iTerm, Kitty, WezTerm, Alacritty, Warp, Terminal.app) and works with tmux.
 
 ---
 
@@ -192,7 +201,7 @@ copilot-cli-agent-pulse/
 ├── agent_pulse.tcss         # Textual CSS stylesheet
 ├── pyproject.toml            # Python packaging + entry point
 ├── requirements.txt          # Python dependencies (rich, textual)
-├── start.sh                  # Launcher (auto-opens in new terminal window)
+├── start.sh                  # Launcher (--new-window for separate window)
 ├── quickstart.sh             # One-command installer
 ├── site/                     # Showcase website (GitHub Pages)
 │   └── index.html
