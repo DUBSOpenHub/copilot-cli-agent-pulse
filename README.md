@@ -21,7 +21,7 @@ Then just type `agentpulse` — the dashboard opens in a new terminal window aut
 </div>
 
 <div align="center">
-<img src="assets/dashboard-screenshot.svg" alt="Agent Pulse Dashboard" width="700">
+<img src="assets/dashboard-screenshot.png" alt="Agent Pulse Dashboard" width="700">
 </div>
 
 ---
