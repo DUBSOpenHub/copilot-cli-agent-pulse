@@ -808,6 +808,21 @@ class PulseStore:
         total = success + fail
         return (success, fail, total)
 
+    def running_subagents_since(self, since_ts: int) -> int:
+        """Count sub-agent events launched since since_ts that have not yet completed.
+
+        A sub-agent is 'running' if its row in agent_events still has outcome='unknown'
+        (i.e. we have not yet observed a tool.execution_complete for it) and it was
+        started recently enough that it is plausibly still in flight.
+        """
+        cur = self._con.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM agent_events WHERE ts>=? AND outcome = 'unknown'",
+            (since_ts,),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
     # Feature 2: Model distribution
     def model_distribution_since(self, since_ts: int) -> Dict[str, int]:
         """Return model->count for events since timestamp."""
@@ -895,6 +910,9 @@ class PulseMetrics:
     cost_estimate_today: float = 0.0
     # Feature 4: Fleet health score
     health_score: int = 100
+    # Real-time sub-agent tracking
+    running_subagents: int = 0
+    subagents_last5m: int = 0
 
     def __post_init__(self):
         if self.active_session_list is None:
@@ -986,6 +1004,12 @@ class MetricsEngine:
             notes={"sessions_by_tty": sessions_by_tty, "running_agents_est": running_agents_est},
         )
 
+        # Real-time sub-agent counts (in-flight = started, not yet completed, <30min old)
+        running_subagents_from_events = self.store.running_subagents_since(ts - 30 * 60)
+        # Combine with process-based signal; take the max so we never under-count.
+        running_subagents = max(running_subagents_from_events, running_agents_est)
+        subagents_last5m = agent_events_last5m
+
         # Feature 1: Success rate
         success_count, fail_count, rate_total = self.store.success_rate_since(ts - 24 * 3600)
         success_rate_24h = round(success_count / rate_total, 3) if rate_total > 0 else 0.0
@@ -1035,6 +1059,8 @@ class MetricsEngine:
             tokens_today=tokens_today,
             cost_estimate_today=cost_estimate_today,
             health_score=health_score,
+            running_subagents=running_subagents,
+            subagents_last5m=subagents_last5m,
         )
 
 
@@ -1128,23 +1154,28 @@ class StatPanel(Static):
         t.add_column(justify="right")
         t.add_column(justify="left")
         t.add_row(
-            Text("Active Sessions:", style="bold white"),
+            Text("Agents (sessions):", style="bold white"),
             Text(str(m.active_sessions), style="bold #7CFF6B"),
             bar(m.active_sessions),
         )
         t.add_row(
-            Text("Running Agents :", style="bold white"),
-            Text(str(m.running_agents_est), style="bold #B388FF"),
-            bar(m.running_agents_est),
+            Text("Sub-Agents running:", style="bold white"),
+            Text(str(m.running_subagents), style="bold #B388FF"),
+            bar(m.running_subagents),
         )
         t.add_row(
-            Text("Velocity       :", style="bold white"),
+            Text("Sub-Agents (5m)  :", style="bold white"),
+            Text(str(m.subagents_last5m), style="bold #00F5D4"),
+            bar(m.subagents_last5m),
+        )
+        t.add_row(
+            Text("Velocity         :", style="bold white"),
             Text(f"{m.velocity}/hr", style="bold #FFD166"),
             Text(f"peak: {m.peak_velocity}/hr", style="#8D99AE"),
         )
         trend = "▲ trending up" if m.spawned_today > 0 else "—"
         t.add_row(
-            Text("Today's Total  :", style="bold white"),
+            Text("Sub-Agents today :", style="bold white"),
             Text(str(m.spawned_today), style="bold #FF4D6D"),
             Text(trend, style="#8D99AE"),
         )
@@ -1185,16 +1216,15 @@ class HistoryPanel(Static):
             Text("7d", style="bold #8D99AE"),
             Text("30d", style="bold #8D99AE"),
         )
-        # Sessions row
+        # Agents row (top-level sessions) + Sub-Agents row (task-tool launches)
         t.add_row(
             Text("Sessions", style="bold #00D1FF"),
             Text(str(m.sessions_today), style="bold #FFD166"),
             Text(str(m.sessions_week), style="bold #00F5D4"),
             Text(str(m.sessions_month), style="bold #B388FF"),
         )
-        # Agents row
         t.add_row(
-            Text("Agents", style="bold #7CFF6B"),
+            Text("Sub-Agents", style="bold #7CFF6B"),
             Text(str(m.spawned_today), style="bold #FFD166"),
             Text(str(m.spawned_week), style="bold #00F5D4"),
             Text(str(m.spawned_month), style="bold #B388FF"),
@@ -1206,11 +1236,11 @@ class HistoryPanel(Static):
         t2.add_column(justify="left")
         t2.add_column(justify="left")
         t2.add_row(
-            Text("14d agents  ", style="bold #7CFF6B"),
+            Text("14d sub-agents", style="bold #7CFF6B"),
             Text(sparkline(daily_agents, width=14), style="#7CFF6B"),
         )
         t2.add_row(
-            Text("14d sessions", style="bold #00D1FF"),
+            Text("14d sessions  ", style="bold #00D1FF"),
             Text(sparkline(daily_sessions, width=14), style="#00D1FF"),
         )
 
@@ -1222,7 +1252,7 @@ class HistoryPanel(Static):
         else:
             trend = Text("  ► steady", style="#8D99AE")
 
-        all_time = Text.assemble(("All-time: ", "#8D99AE"), (str(m.spawned_all_time), "bold #00D1FF"), (" agents", "#8D99AE"))
+        all_time = Text.assemble(("All-time: ", "#8D99AE"), (str(m.spawned_all_time), "bold #00D1FF"), (" sub-agents", "#8D99AE"))
 
         return Panel(Group(t, t2, trend, all_time), border_style="#FF4D6D", title="[bold #00D1FF]📊 TREND ANALYSIS[/]")
 
@@ -1233,14 +1263,20 @@ class MixPanel(Static):
     def render(self) -> Panel:
         m = self.metrics
         if not m:
-            return Panel("…", border_style="#7CFF6B", title="[bold #FFD166]◆ AGENT BREAKDOWN[/]")
+            return Panel("…", border_style="#7CFF6B", title="[bold #FFD166]◆ SUB-AGENT BREAKDOWN[/]")
 
         by_type = dict(m.spawned_by_type_24h)
+        total_24h = sum(by_type.values())
+        title = (
+            f"[bold #FFD166]◆ SUB-AGENT BREAKDOWN[/]  "
+            f"[#8D99AE]· running[/] [bold #B388FF]{m.running_subagents}[/]  "
+            f"[#8D99AE]· 24h[/] [bold #FFD166]{total_24h}[/]"
+        )
         if not by_type:
-            body = Text("No launches observed yet.\n(Leave Agent Pulse running.)", style="#8D99AE")
-            return Panel(body, border_style="#7CFF6B", title="[bold #FFD166]◆ AGENT BREAKDOWN[/]")
+            body = Text("No sub-agent launches observed yet.\n(Leave Agent Pulse running.)", style="#8D99AE")
+            return Panel(body, border_style="#7CFF6B", title=title)
 
-        total = max(sum(by_type.values()), 1)
+        total = max(total_24h, 1)
         maxv = max(by_type.values())
         type_icons = {
             "explore": "⚡", "task": "⚙", "general-purpose": "●",
@@ -1271,7 +1307,7 @@ class MixPanel(Static):
                 bar(by_type[k]).stylize(color),
             )
 
-        return Panel(table, border_style="#7CFF6B", title="[bold #FFD166]◆ AGENT BREAKDOWN[/]")
+        return Panel(table, border_style="#7CFF6B", title=title)
 
 
 class SignalPanel(Static):
@@ -1508,6 +1544,14 @@ class HealthGauge(Static):
         t.add_row(
             Text("Errors (24h)", style="#8D99AE"),
             Text(str(m.error_count_24h), style=err_color),
+        )
+        t.add_row(
+            Text("Sub-Agents running", style="#8D99AE"),
+            Text(str(m.running_subagents), style="bold #B388FF"),
+        )
+        t.add_row(
+            Text("Sub-Agents (24h)", style="#8D99AE"),
+            Text(str(m.spawned_today), style="bold #7CFF6B"),
         )
 
         pulse = "●" if self.tick % 2 == 0 else "○"
