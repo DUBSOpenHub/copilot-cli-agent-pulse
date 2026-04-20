@@ -106,7 +106,11 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 
 | Flag | Description |
 |------|-------------|
-| `--here` | Run in the current terminal instead of opening a new window |
+| `--here` | Run in the current terminal (one-off; doesn't change your saved preference) |
+| `--new-window` | Open a new window (one-off; doesn't change your saved preference) |
+| `--reconfigure` | Forget the saved launch-mode preference and ask again on next run |
+
+> 💡 **First run**: Agent Pulse asks whether you prefer a new window or in-place, then remembers your choice in `~/.config/agent-pulse/launcher.conf`. Explicit flags always override the saved preference.
 
 ### Dashboard Options
 

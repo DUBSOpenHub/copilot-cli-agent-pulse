@@ -1,25 +1,38 @@
 #!/bin/bash
 # Agent Pulse — Quick launcher
 #
-# Default: opens the live dashboard in a new window of your current terminal
-#          emulator (auto-detects Ghostty, iTerm, Kitty, WezTerm, Alacritty,
-#          Warp, Terminal.app, tmux, gnome-terminal, xterm).
+# On first run, asks whether you prefer a new window or in-place, then
+# remembers your choice in ~/.config/agent-pulse/launcher.conf.
 #
-# Use --here to run in the current terminal instead (useful over SSH,
-# inside tmux panes, or when you don't want a new window).
+# Flags:
+#   --here          Run in the current terminal (one-off; does not alter saved pref)
+#   --new-window    Open a new window of your current terminal emulator (one-off)
+#   --reconfigure   Forget the saved preference and ask again
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV="$SCRIPT_DIR/.venv"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/agent-pulse"
+CONFIG_FILE="$CONFIG_DIR/launcher.conf"
 
 # --- Parse launcher flags (consumed here, not passed to agent_pulse.py) ---
 RUN_HERE=0
+FORCE_NEW_WINDOW=0
+RECONFIGURE=0
 PASSTHROUGH_ARGS=()
 for arg in "$@"; do
     case "$arg" in
-        --here) RUN_HERE=1 ;;
-        *)      PASSTHROUGH_ARGS+=("$arg") ;;
+        --here)         RUN_HERE=1 ;;
+        --new-window)   FORCE_NEW_WINDOW=1 ;;
+        --reconfigure)  RECONFIGURE=1 ;;
+        *)              PASSTHROUGH_ARGS+=("$arg") ;;
     esac
 done
+
+# --- Reconfigure: wipe saved preference and prompt again ---
+if [ "$RECONFIGURE" = "1" ]; then
+    rm -f "$CONFIG_FILE"
+    echo "🔁 Launcher preference cleared — you'll be asked again."
+fi
 
 # Create venv if missing
 if [ ! -d "$VENV" ]; then
@@ -33,8 +46,54 @@ if ! "$VENV/bin/python" -c "import textual" 2>/dev/null; then
     "$VENV/bin/pip" install --quiet -r "$SCRIPT_DIR/requirements.txt"
 fi
 
-# If --here, or already inside a spawned child terminal, run directly.
-if [ "$RUN_HERE" = "1" ] || [ "$AGENT_PULSE_SPAWNED" = "1" ]; then
+# If already inside a spawned child terminal, just run directly.
+if [ "$AGENT_PULSE_SPAWNED" = "1" ]; then
+    exec "$VENV/bin/python" "$SCRIPT_DIR/agent_pulse.py" "${PASSTHROUGH_ARGS[@]}"
+fi
+
+# --- Decide launch mode: flag > saved pref > first-run prompt > default ---
+MODE=""
+if [ "$RUN_HERE" = "1" ]; then
+    MODE="here"
+elif [ "$FORCE_NEW_WINDOW" = "1" ]; then
+    MODE="new-window"
+elif [ -f "$CONFIG_FILE" ]; then
+    MODE="$(grep -E '^mode=' "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2)"
+fi
+
+# First run (or corrupt config) — prompt the user if we have a TTY.
+if [ -z "$MODE" ] || { [ "$MODE" != "here" ] && [ "$MODE" != "new-window" ]; }; then
+    if [ -t 0 ] && [ -t 1 ]; then
+        echo ""
+        echo "  ⚡ Agent Pulse — first-run setup"
+        echo "  ────────────────────────────────"
+        echo ""
+        echo "  How would you like the dashboard to launch?"
+        echo ""
+        echo "    1) 🪟  New window  — pops up in a fresh window of your terminal"
+        echo "                         (keeps your current shell free; default)"
+        echo "    2) 🏠  Here        — takes over this terminal until you press q"
+        echo "                         (use for SSH, tmux panes, screen recordings)"
+        echo ""
+        printf "  Choose [1/2] (default: 1): "
+        read -r CHOICE < /dev/tty || CHOICE=""
+        case "$CHOICE" in
+            2|h|here|H) MODE="here" ;;
+            *)          MODE="new-window" ;;
+        esac
+        mkdir -p "$CONFIG_DIR"
+        echo "mode=$MODE" > "$CONFIG_FILE"
+        echo ""
+        echo "  ✅ Saved: $MODE   (change anytime with: agentpulse --reconfigure)"
+        echo ""
+    else
+        # Non-interactive (piped / scripted) — use safe default.
+        MODE="new-window"
+    fi
+fi
+
+# Honour "here" mode.
+if [ "$MODE" = "here" ]; then
     exec "$VENV/bin/python" "$SCRIPT_DIR/agent_pulse.py" "${PASSTHROUGH_ARGS[@]}"
 fi
 
