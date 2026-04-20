@@ -3,8 +3,8 @@ class AgentPulse < Formula
 
   desc "Real-time terminal dashboard for monitoring GitHub Copilot CLI sessions and agents"
   homepage "https://github.com/DUBSOpenHub/copilot-cli-agent-pulse"
-  url "https://github.com/DUBSOpenHub/copilot-cli-agent-pulse/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "PLACEHOLDER"
+  url "https://github.com/DUBSOpenHub/copilot-cli-agent-pulse/archive/refs/tags/v2.3.0.tar.gz"
+  sha256 "8ee885685115c63f1ed070db1b27bf4ff08b37a986cdc74ac7155a9e79403304"
   license "MIT"
 
   depends_on "python@3.12"
