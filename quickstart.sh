@@ -35,6 +35,7 @@ echo "  ✅ Installed to $DEST"
 echo ""
 
 # Auto-add shell aliases if not already present
+FISH_CONFIG="$HOME/.config/fish/config.fish"
 SHELL_RC=""
 if [ -f "$HOME/.zshrc" ]; then
   SHELL_RC="$HOME/.zshrc"
@@ -42,13 +43,35 @@ elif [ -f "$HOME/.bashrc" ]; then
   SHELL_RC="$HOME/.bashrc"
 fi
 
+ALIASES_ADDED=0
+
+# bash/zsh aliases
 if [ -n "$SHELL_RC" ] && ! grep -q 'alias agentpulse=' "$SHELL_RC" 2>/dev/null; then
   echo "" >> "$SHELL_RC"
-  echo "# Agent Pulse — auto-opens live dashboard in a new terminal window" >> "$SHELL_RC"
+  echo "# Agent Pulse — live terminal dashboard" >> "$SHELL_RC"
   echo "alias agentpulse='~/copilot-cli-agent-pulse/start.sh'" >> "$SHELL_RC"
   echo "alias agentdashboard='~/copilot-cli-agent-pulse/start.sh'" >> "$SHELL_RC"
-  echo "  🔗 Added 'agentpulse' and 'agentdashboard' aliases to $(basename "$SHELL_RC")"
-else
+  echo "alias agentpulse-here='~/copilot-cli-agent-pulse/start.sh --here'" >> "$SHELL_RC"
+  echo "  🔗 Added 'agentpulse', 'agentdashboard', 'agentpulse-here' aliases to $(basename "$SHELL_RC")"
+  ALIASES_ADDED=1
+fi
+
+# fish aliases (works alongside bash/zsh)
+if [ -f "$FISH_CONFIG" ] || echo "${SHELL:-}" | grep -q fish; then
+  mkdir -p "$(dirname "$FISH_CONFIG")"
+  touch "$FISH_CONFIG"
+  if ! grep -q 'alias agentpulse' "$FISH_CONFIG" 2>/dev/null; then
+    echo "" >> "$FISH_CONFIG"
+    echo "# Agent Pulse — live terminal dashboard" >> "$FISH_CONFIG"
+    echo "alias agentpulse '~/copilot-cli-agent-pulse/start.sh'" >> "$FISH_CONFIG"
+    echo "alias agentdashboard '~/copilot-cli-agent-pulse/start.sh'" >> "$FISH_CONFIG"
+    echo "alias agentpulse-here '~/copilot-cli-agent-pulse/start.sh --here'" >> "$FISH_CONFIG"
+    echo "  🔗 Added 'agentpulse', 'agentdashboard', 'agentpulse-here' aliases to config.fish"
+    ALIASES_ADDED=1
+  fi
+fi
+
+if [ "$ALIASES_ADDED" -eq 0 ]; then
   echo "  🔗 Aliases already configured."
 fi
 
@@ -56,6 +79,9 @@ echo ""
 echo "  Launch it (opens in a new terminal window):"
 echo "    agentpulse"
 echo "    agentdashboard"
+echo ""
+echo "  Run in the current terminal (SSH / tmux / no new window):"
+echo "    agentpulse --here"
 echo ""
 echo "  Or run directly:"
 echo "    $DEST/start.sh"
