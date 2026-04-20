@@ -1545,14 +1545,6 @@ class HealthGauge(Static):
             Text("Errors (24h)", style="#8D99AE"),
             Text(str(m.error_count_24h), style=err_color),
         )
-        t.add_row(
-            Text("Sub-Agents running", style="#8D99AE"),
-            Text(str(m.running_subagents), style="bold #B388FF"),
-        )
-        t.add_row(
-            Text("Sub-Agents (24h)", style="#8D99AE"),
-            Text(str(m.spawned_today), style="bold #7CFF6B"),
-        )
 
         pulse = "●" if self.tick % 2 == 0 else "○"
         status = Text.assemble((pulse + " ", f"bold {color}"), ("MONITORING", f"bold {color}"))
