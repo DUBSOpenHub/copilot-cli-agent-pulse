@@ -6,11 +6,25 @@
 
 ### 🚀 Install & Launch
 
+**Homebrew (recommended on macOS):**
+
+```bash
+brew tap DUBSOpenHub/copilot-cli-agent-pulse
+brew install agent-pulse
+```
+
+**Quick installer (any platform):**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DUBSOpenHub/copilot-cli-agent-pulse/main/quickstart.sh | bash
 ```
 
-Then just type `agentpulse` — the dashboard opens in a new terminal window automatically.
+Then just type `agentpulse` — the dashboard opens in a new window of your current
+terminal emulator (auto-detects Ghostty, iTerm, Kitty, WezTerm, Alacritty, Warp,
+Terminal.app, and tmux).
+
+Use `agentpulse --here` to run it in the current terminal instead (handy over SSH
+or inside a tmux pane).
 
 <div align="center">
 
@@ -66,14 +80,17 @@ That's it. The dashboard auto-detects your Copilot CLI sessions and starts monit
 
 ### Shell Commands
 
-Add these aliases to your `~/.zshrc` or `~/.bashrc`:
+Add these aliases to your `~/.zshrc` or `~/.bashrc` (fish users: `~/.config/fish/config.fish`):
 
 ```bash
 alias agentpulse='~/copilot-cli-agent-pulse/start.sh'
 alias agentdashboard='~/copilot-cli-agent-pulse/start.sh'
+alias agentpulse-here='~/copilot-cli-agent-pulse/start.sh --here'
 ```
 
-Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the live dashboard **automatically opens in a new terminal window** so it never blocks your current session.
+Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the live dashboard **automatically opens in a new terminal window** so it never blocks your current session. The launcher auto-detects **Ghostty, iTerm, Kitty, WezTerm, Alacritty, Warp, Terminal.app, tmux, gnome-terminal,** and **xterm**.
+
+Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboard **in the current terminal** instead — ideal for SSH sessions or tmux panes.
 
 ---
 
@@ -85,7 +102,13 @@ Then just type **`agentpulse`** or **`agentdashboard`** from anywhere — the li
 | **Export** | `python agent_pulse.py --export` | JSON export to stdout |
 | **No Splash** | `python agent_pulse.py --no-splash` | Skip boot animation |
 
-### Options
+### Launcher Options
+
+| Flag | Description |
+|------|-------------|
+| `--here` | Run in the current terminal instead of opening a new window |
+
+### Dashboard Options
 
 ```
 --export,    -e          Export JSON to stdout
@@ -192,7 +215,7 @@ copilot-cli-agent-pulse/
 ├── agent_pulse.tcss         # Textual CSS stylesheet
 ├── pyproject.toml            # Python packaging + entry point
 ├── requirements.txt          # Python dependencies (rich, textual)
-├── start.sh                  # Launcher (auto-opens in new terminal window)
+├── start.sh                  # Launcher (auto-detects terminal emulator; --here for in-place)
 ├── quickstart.sh             # One-command installer
 ├── site/                     # Showcase website (GitHub Pages)
 │   └── index.html

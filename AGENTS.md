@@ -13,7 +13,7 @@ Agent Pulse is a real-time terminal dashboard for monitoring GitHub Copilot CLI 
 | `agent_pulse.py` | Main dashboard application (all logic, rendering, data collection) | ✅ Primary target |
 | `pyproject.toml` | Python packaging and metadata | Only for version/deps |
 | `requirements.txt` | Python dependency list | Keep in sync with pyproject.toml |
-| `start.sh` | Launcher — auto-opens dashboard in a new terminal window | Rarely |
+| `start.sh` | Launcher — opens dashboard in a new window of the user's terminal (Ghostty/iTerm/Kitty/WezTerm/Alacritty/Warp/Terminal.app/tmux/Linux); `--here` runs in current terminal | Rarely |
 | `site/index.html` | Showcase website | For site updates only |
 | `experimental/ink/` | React/Ink TUI (experimental) | Separate from main app |
 
