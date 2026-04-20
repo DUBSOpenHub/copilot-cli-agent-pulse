@@ -7,7 +7,7 @@ agent_pulse.py          — Main dashboard (single-file, Python/Textual/Rich)
 agent_pulse.tcss        — Textual CSS stylesheet (responsive layout)
 pyproject.toml          — Python packaging + console entry point
 requirements.txt        — Python deps (rich>=13.0.0, textual>=0.50.0)
-start.sh                — Launcher (auto-opens in a new terminal window)
+start.sh                — Launcher (auto-detects terminal emulator for new window; --here for in-place)
 quickstart.sh           — One-command installer
 site/index.html         — Showcase website (GitHub Pages)
 experimental/ink/       — React/Ink TUI (experimental, separate stack)
