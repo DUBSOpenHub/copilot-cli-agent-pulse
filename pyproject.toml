@@ -32,6 +32,10 @@ dependencies = [
     "textual>=0.50.0",
 ]
 
+[tool.setuptools]
+py-modules = ["agent_pulse"]
+packages = []
+
 [project.scripts]
 agent-pulse = "agent_pulse:main"
 
