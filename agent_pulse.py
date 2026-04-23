@@ -1666,7 +1666,8 @@ class GlowTitle(Static):
 # ----------------------------
 
 class AgentPulseApp(App):
-    CSS_PATH = "agent_pulse.tcss"
+    _css_file = Path(__file__).parent / "agent_pulse.tcss"
+    CSS = _css_file.read_text() if _css_file.exists() else ""
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
         ("q", "quit", "Quit"),
