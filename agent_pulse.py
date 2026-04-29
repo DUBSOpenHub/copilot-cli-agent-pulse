@@ -100,6 +100,16 @@ TYPE_COLOR: Dict[str, str] = {
     "unknown": "#8D99AE",
 }
 
+LIVE_EVENT_WINDOW_S = 30 * 60
+LEVEL_KEYS = (
+    "division_commanders",
+    "commanders",
+    "squad_leads",
+    "workers",
+    "reviewers",
+    "other",
+)
+
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
 _WAVE_CHARS = "▁▂▃▄▅▆▇█▇▆▅▄▃▂▁"
 _HEARTBEATS = ["💗", "💖", "💓", "❤️", "💓", "💗"]
@@ -348,6 +358,67 @@ class LiveAgent:
     model: Optional[str] = None
     pid: Optional[int] = None
     parent: Optional[str] = None
+
+
+def empty_level_counts() -> Dict[str, int]:
+    return {key: 0 for key in LEVEL_KEYS}
+
+
+def classify_agent_level(
+    agent_type: str,
+    name: Optional[str] = None,
+    parent: Optional[str] = None,
+    source: Optional[str] = None,
+) -> str:
+    """Classify visible agents into hierarchy levels for swarm dashboards."""
+
+    haystack = " ".join(
+        part.lower()
+        for part in (agent_type, name or "", parent or "", source or "")
+        if part
+    )
+    normalized_type = agent_type.lower()
+
+    if normalized_type == "metaswarm-swarm":
+        return "other"
+    if normalized_type in {"metaswarm-squad"} or "squad" in haystack:
+        return "squad_leads"
+    if normalized_type in {"metaswarm-worker", "stampede-agent", "dispatch-worker"}:
+        return "workers"
+    if normalized_type in {"task", "explore"}:
+        return "workers"
+    if normalized_type == "code-review" or "reviewer" in haystack or "code-review" in haystack:
+        return "reviewers"
+    if "division" in haystack or "div-" in haystack:
+        return "division_commanders"
+    if (
+        normalized_type in {"swarm-command", "stampede-commander"}
+        or "commander" in haystack
+        or "cmd-" in haystack
+        or "hive-auth-" in haystack
+        or "hive1k" in haystack
+    ):
+        return "commanders"
+    if "worker" in haystack or "leaf" in haystack or "validator" in haystack:
+        return "workers"
+    if "lead" in haystack:
+        return "squad_leads"
+    return "other"
+
+
+def count_agent_levels(agents: Sequence[LiveAgent], *, running_only: bool = True) -> Dict[str, int]:
+    counts = empty_level_counts()
+    for agent in agents:
+        if running_only and agent.status not in {"RUN", "IN-FLIGHT"}:
+            continue
+        level = classify_agent_level(
+            agent.agent_type,
+            agent.name,
+            agent.parent,
+            agent.source,
+        )
+        counts[level] = counts.get(level, 0) + 1
+    return counts
 
 
 class ProcessCollector:
@@ -1296,6 +1367,18 @@ class PulseStore:
         cur.execute("SELECT agent_type, COUNT(*) FROM agent_events WHERE ts>=? GROUP BY agent_type", (since_ts,))
         return {str(k): int(v) for k, v in cur.fetchall()}
 
+    def agent_events_by_level_since(self, since_ts: int) -> Dict[str, int]:
+        cur = self._con.cursor()
+        cur.execute(
+            "SELECT agent_type, name, COUNT(*) FROM agent_events WHERE ts>=? GROUP BY agent_type, name",
+            (since_ts,),
+        )
+        counts = empty_level_counts()
+        for agent_type, name, count in cur.fetchall():
+            level = classify_agent_level(str(agent_type), name)
+            counts[level] = counts.get(level, 0) + int(count)
+        return counts
+
     def series_snapshots(self, seconds: int = 240, step: int = 1) -> List[Tuple[int, int, int]]:
         since = now_ts() - seconds
         cur = self._con.cursor()
@@ -1412,7 +1495,7 @@ class PulseStore:
         row = cur.fetchone()
         return int(row[0]) if row and row[0] is not None else 0
 
-    def running_agent_events_since(self, since_ts: int, limit: int = 25) -> List[Tuple[int, str, Optional[str], Optional[str]]]:
+    def running_agent_events_since(self, since_ts: int, limit: int = 500) -> List[Tuple[int, str, Optional[str], Optional[str]]]:
         """Return recent event-stream agents that still look in-flight."""
         cur = self._con.cursor()
         cur.execute(
@@ -1517,6 +1600,9 @@ class PulseMetrics:
     # Real-time sub-agent tracking
     running_subagents: int = 0
     subagents_last5m: int = 0
+    total_live_agents: int = 0
+    live_level_counts: Dict[str, int] = None
+    launch_level_counts_5m: Dict[str, int] = None
     metaswarm_runs: List[MetaswarmRun] = None
     metaswarm_active_commanders: int = 0
     metaswarm_children_running: int = 0
@@ -1530,6 +1616,10 @@ class PulseMetrics:
             self.active_session_list = []
         if self.model_dist_24h is None:
             self.model_dist_24h = {}
+        if self.live_level_counts is None:
+            self.live_level_counts = empty_level_counts()
+        if self.launch_level_counts_5m is None:
+            self.launch_level_counts_5m = empty_level_counts()
         if self.metaswarm_runs is None:
             self.metaswarm_runs = []
         if self.live_agents is None:
@@ -1668,10 +1758,10 @@ class MetricsEngine:
             notes={"sessions_by_tty": sessions_by_tty, "running_agents_est": running_agents_est},
         )
 
-        # Real-time live-run counts. Event-stream rows without completion are only
-        # treated as live for a short window; long-lived runs should still be visible
-        # through process, tmux, or Stampede telemetry sources.
-        running_subagents_from_events = self.store.running_subagents_since(ts - 5 * 60)
+        # Real-time live-run counts. Event-stream rows without completion stay
+        # visible long enough for deep swarms, while process/tmux/ledger signals
+        # remain the preferred sources for long-lived runs.
+        running_subagents_from_events = self.store.running_subagents_since(ts - LIVE_EVENT_WINDOW_S)
         def commander_is_active(c: MetaswarmCommander) -> bool:
             if c.pid_status == "run":
                 return True
@@ -1711,7 +1801,10 @@ class MetricsEngine:
         live_agents.extend(self._live_from_processes(procs, ts))
         live_agents.extend(self.tmux.collect())
         live_agents.extend(self.stampede.live_agents(metaswarm_runs))
-        for ev_ts, ev_type, ev_name, ev_model in self.store.running_agent_events_since(ts - 5 * 60):
+        for ev_ts, ev_type, ev_name, ev_model in self.store.running_agent_events_since(
+            ts - LIVE_EVENT_WINDOW_S,
+            limit=500,
+        ):
             if ev_type.startswith("metaswarm-"):
                 continue
             live_agents.append(
@@ -1748,19 +1841,29 @@ class MetricsEngine:
                 rank = 4
             return (rank, a.age_s, a.source, a.agent_id)
 
-        live_agents = sorted(
+        all_live_agents = sorted(
             deduped_live.values(),
             key=live_rank,
-        )[:80]
+        )
+        live_level_counts = count_agent_levels(all_live_agents, running_only=True)
+        total_live_agents = sum(live_level_counts.values())
+        live_agents = all_live_agents[:80]
         live_running_count = sum(
             1
-            for a in live_agents
+            for a in all_live_agents
             if a.status in {"RUN", "IN-FLIGHT"} and a.agent_type != "stampede-monitor"
         )
 
         # Combine filesystem, process, and event signals; take max so we never under-count.
-        running_subagents = max(running_subagents_from_events, running_agents_est, metaswarm_children_running, live_running_count)
+        running_subagents = max(
+            running_subagents_from_events,
+            running_agents_est,
+            metaswarm_children_running,
+            live_running_count,
+            total_live_agents,
+        )
         subagents_last5m = agent_events_last5m
+        launch_level_counts_5m = self.store.agent_events_by_level_since(ts - 5 * 60)
 
         # Feature 1: Success rate
         success_count, fail_count, rate_total = self.store.success_rate_since(ts - 24 * 3600)
@@ -1813,6 +1916,9 @@ class MetricsEngine:
             health_score=health_score,
             running_subagents=running_subagents,
             subagents_last5m=subagents_last5m,
+            total_live_agents=total_live_agents,
+            live_level_counts=live_level_counts,
+            launch_level_counts_5m=launch_level_counts_5m,
             metaswarm_runs=metaswarm_runs,
             metaswarm_active_commanders=metaswarm_active_commanders,
             metaswarm_children_running=metaswarm_children_running,
@@ -1912,15 +2018,37 @@ class StatPanel(Static):
         t.add_column(justify="left")
         t.add_column(justify="right")
         t.add_column(justify="left")
+        levels = m.live_level_counts or empty_level_counts()
+        commanders = levels.get("division_commanders", 0) + levels.get("commanders", 0)
         t.add_row(
-            Text("Agents (sessions):", style="bold white"),
+            Text("Sessions        :", style="bold white"),
             Text(str(m.active_sessions), style="bold #7CFF6B"),
             bar(m.active_sessions),
         )
         t.add_row(
-            Text("Live runs       :", style="bold white"),
-            Text(str(m.running_subagents), style="bold #B388FF"),
-            bar(m.running_subagents),
+            Text("All live levels :", style="bold white"),
+            Text(str(m.total_live_agents), style="bold #B388FF"),
+            bar(m.total_live_agents),
+        )
+        t.add_row(
+            Text("Commanders      :", style="bold white"),
+            Text(str(commanders), style="bold #00F5D4"),
+            bar(commanders),
+        )
+        t.add_row(
+            Text("Squad leads     :", style="bold white"),
+            Text(str(levels.get("squad_leads", 0)), style="bold #FFD166"),
+            bar(levels.get("squad_leads", 0)),
+        )
+        t.add_row(
+            Text("Workers         :", style="bold white"),
+            Text(str(levels.get("workers", 0)), style="bold #7CFF6B"),
+            bar(levels.get("workers", 0)),
+        )
+        t.add_row(
+            Text("Reviewers       :", style="bold white"),
+            Text(str(levels.get("reviewers", 0)), style="bold #FF4D6D"),
+            bar(levels.get("reviewers", 0)),
         )
         t.add_row(
             Text("Launch events 5m:", style="bold white"),
@@ -2207,10 +2335,14 @@ class LiveRunsPanel(Static):
             for a in m.live_agents
             if a.status in {"RUN", "IN-FLIGHT"} and a.agent_type != "stampede-monitor"
         )
+        levels = m.live_level_counts or empty_level_counts()
+        commanders = levels.get("division_commanders", 0) + levels.get("commanders", 0)
         title = (
             f"[bold #00F5D4]◉ LIVE RUNS + SWARM SUB-AGENTS[/]  "
             f"[#8D99AE]· running[/] [bold #7CFF6B]{running}[/]  "
-            f"[#8D99AE]· swarm children[/] [bold #FFD166]{m.metaswarm_children_seen}[/]"
+            f"[#8D99AE]· cmd[/] [bold #00F5D4]{commanders}[/]  "
+            f"[#8D99AE]· squads[/] [bold #FFD166]{levels.get('squad_leads', 0)}[/]  "
+            f"[#8D99AE]· workers[/] [bold #7CFF6B]{levels.get('workers', 0)}[/]"
         )
 
         t = Table.grid(padding=(0, 1))
@@ -2258,8 +2390,13 @@ class LiveRunsPanel(Static):
             )
 
         foot = Text(
-            f"Metaswarm: {m.metaswarm_active_commanders} commanders · "
-            f"{m.metaswarm_children_seen} sub-agents seen · "
+            f"Levels now: {commanders} commanders · "
+            f"{levels.get('squad_leads', 0)} squad leads · "
+            f"{levels.get('workers', 0)} workers · "
+            f"{levels.get('reviewers', 0)} reviewers · "
+            f"{levels.get('other', 0)} other.  "
+            f"Metaswarm ledgers: {m.metaswarm_active_commanders} commanders · "
+            f"{m.metaswarm_children_seen} children seen · "
             f"{m.metaswarm_children_running} running · "
             f"{m.metaswarm_children_stale} stale · "
             f"{m.metaswarm_children_last5m} child launches in 5m",
@@ -2642,6 +2779,9 @@ class AgentPulseApp(App):
                 "exported_at": datetime.now(timezone.utc).isoformat(),
                 "active_sessions": m.active_sessions,
                 "running_agents_est": m.running_agents_est,
+                "total_live_agents": m.total_live_agents,
+                "live_level_counts": m.live_level_counts,
+                "launch_level_counts_5m": m.launch_level_counts_5m,
                 "spawned_all_time": m.spawned_all_time,
                 "spawned_today": m.spawned_today,
                 "spawned_week": m.spawned_week,
@@ -2777,6 +2917,9 @@ def _mode_export() -> None:
         "version": VERSION,
         "active_sessions": m.active_sessions,
         "running_agents_est": m.running_agents_est,
+        "total_live_agents": m.total_live_agents,
+        "live_level_counts": m.live_level_counts,
+        "launch_level_counts_5m": m.launch_level_counts_5m,
         "spawned_all_time": m.spawned_all_time,
         "spawned_today": m.spawned_today,
         "spawned_week": m.spawned_week,
