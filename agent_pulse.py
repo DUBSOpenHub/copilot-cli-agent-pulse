@@ -61,6 +61,9 @@ ASCII_LOGO = r"""
 ASCII_LOGO_COMPACT = "⚡ AGENT PULSE"
 
 AGENT_TYPES = (
+    "copilot",
+    "tmux-pane",
+    "process",
     "task",
     "explore",
     "general-purpose",
@@ -68,10 +71,17 @@ AGENT_TYPES = (
     "rubber-duck",
     "dispatch-worker",
     "stampede-agent",
+    "stampede-monitor",
+    "stampede-commander",
+    "metaswarm-squad",
+    "metaswarm-worker",
     "swarm-command",
 )
 
 TYPE_COLOR: Dict[str, str] = {
+    "copilot": "#00ff87",
+    "tmux-pane": "#00F5D4",
+    "process": "#C7F9CC",
     "task": "#00D1FF",
     "explore": "#7CFF6B",
     "general-purpose": "#B388FF",
@@ -79,6 +89,10 @@ TYPE_COLOR: Dict[str, str] = {
     "rubber-duck": "#FFD166",
     "dispatch-worker": "#00F5D4",
     "stampede-agent": "#FF9F1C",
+    "stampede-monitor": "#8D99AE",
+    "stampede-commander": "#FF9F1C",
+    "metaswarm-squad": "#FFD166",
+    "metaswarm-worker": "#00F5D4",
     "swarm-command": "#80FFDB",
     "custom": "#C7F9CC",
     "unknown": "#8D99AE",
@@ -103,6 +117,21 @@ def human_age(seconds: int) -> str:
     if seconds < 3600:
         return f"{seconds // 60}m"
     return f"{seconds // 3600}h"
+
+
+def parse_iso_ts(value: object) -> Optional[int]:
+    """Parse common ISO-8601 timestamp values into epoch seconds."""
+    if not value or not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return int(datetime.fromisoformat(text).timestamp())
+    except ValueError:
+        return None
 
 
 def sparkline(values: Sequence[float], *, width: int = 40) -> str:
@@ -259,6 +288,59 @@ class AgentEvent:
     duration_s: Optional[int] = None
 
 
+@dataclass
+class MetaswarmChild:
+    ts: int
+    run_id: str
+    commander_id: str
+    child_id: str
+    role: str
+    event: str
+    status: str
+    model: Optional[str] = None
+
+
+@dataclass
+class MetaswarmCommander:
+    run_id: str
+    commander_id: str
+    model: Optional[str]
+    status: str
+    phase: str
+    pid_status: str
+    squad_leads_launched: int
+    squad_leads_target: int
+    workers_launched: int
+    workers_target: int
+    workers_running: int
+    workers_completed: int
+    workers_failed: int
+    atoms_received: int
+    heartbeat_age_s: Optional[int]
+    recent_children: List[MetaswarmChild] = field(default_factory=list)
+
+
+@dataclass
+class MetaswarmRun:
+    run_id: str
+    repo_path: str
+    profile: str
+    commanders: List[MetaswarmCommander] = field(default_factory=list)
+
+
+@dataclass
+class LiveAgent:
+    source: str
+    agent_id: str
+    agent_type: str
+    name: str
+    status: str
+    age_s: int
+    model: Optional[str] = None
+    pid: Optional[int] = None
+    parent: Optional[str] = None
+
+
 class ProcessCollector:
     def collect(self) -> List[Proc]:
         out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,tty=,command="])
@@ -287,6 +369,75 @@ class ProcessCollector:
         if "agent_pulse.py" in cmd:
             return False
         return ProcessCollector.is_copilot_process(cmd) and bool(_AGENT_MARKERS_RE.search(cmd))
+
+
+class TmuxPaneCollector:
+    """Best-effort inventory of agent-like tmux panes."""
+
+    def collect(self) -> List[LiveAgent]:
+        try:
+            out = subprocess.check_output(
+                [
+                    "tmux",
+                    "list-panes",
+                    "-a",
+                    "-F",
+                    "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_title}\t#{pane_pid}\t#{pane_dead}\t#{pane_dead_status}",
+                ],
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+
+        live: List[LiveAgent] = []
+        for line in out.decode("utf-8", errors="replace").splitlines():
+            parts = line.split("\t")
+            if len(parts) < 7:
+                continue
+            session_name, window_index, pane_index, title, pane_pid, pane_dead, pane_dead_status = parts[:7]
+            haystack = f"{session_name} {title}".lower()
+            if not (
+                session_name.startswith("stampede-")
+                or "copilot" in haystack
+                or "agent" in haystack
+                or "commander" in haystack
+                or "swarm" in haystack
+            ):
+                continue
+            agent_type = "tmux-pane"
+            if "monitor" in haystack:
+                agent_type = "stampede-monitor"
+            elif "commander" in haystack:
+                agent_type = "stampede-commander"
+            elif "stampede" in haystack:
+                agent_type = "stampede-agent"
+            elif "swarm" in haystack:
+                agent_type = "swarm-command"
+            status = "RUN" if pane_dead != "1" else f"DEAD:{pane_dead_status or '?'}"
+            model = None
+            for token in re.split(r"\s+", title.replace("·", " ")):
+                if token.startswith(("claude-", "gpt-", "gemini-", "mistral-")):
+                    model = token
+                    break
+            try:
+                pid = int(pane_pid)
+            except ValueError:
+                pid = None
+            live.append(
+                LiveAgent(
+                    source="tmux",
+                    agent_id=f"{session_name}:{window_index}.{pane_index}",
+                    agent_type=agent_type,
+                    name=title or session_name,
+                    status=status,
+                    age_s=0,
+                    model=model,
+                    pid=pid,
+                    parent=session_name,
+                )
+            )
+        return live
 
 
 class CopilotLogTailer:
@@ -527,6 +678,358 @@ class SessionEventTailer:
         return self.store.insert_agent_events(out)
 
 
+class StampedeTelemetryCollector:
+    """Read Terminal Stampede metaswarm telemetry from repo-local .stampede runs."""
+
+    _RUN_DIR_LIMIT = 12
+    _LEDGER_TAIL_BYTES = 80_000
+
+    def __init__(self, store: "PulseStore"):
+        self.store = store
+        self._bases_cache: List[Path] = []
+        self._last_base_scan = 0.0
+
+    @staticmethod
+    def _read_json(path: Path) -> Dict:
+        try:
+            if path.exists():
+                data = json.loads(path.read_text(errors="replace"))
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def _pid_alive(pid: object) -> bool:
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except (OSError, TypeError, ValueError):
+            return False
+
+    def _iter_stampede_bases(self) -> List[Path]:
+        """Scan common roots plus an opt-in root list without walking home deeply every tick."""
+        if self._bases_cache and time.time() - self._last_base_scan < 10:
+            return self._bases_cache
+
+        env_roots = [
+            Path(p).expanduser()
+            for p in os.environ.get("AGENT_PULSE_SCAN_ROOTS", "").split(os.pathsep)
+            if p
+        ]
+        roots = [Path.cwd(), Path.home(), Path.home() / "dev", Path.home() / "tmp", *env_roots]
+        bases: Dict[str, Path] = {}
+
+        def add_base(path: Path) -> None:
+            if path.exists() and path.is_dir():
+                bases[str(path)] = path
+
+        def scan_depth(root: Path, max_depth: int = 3) -> None:
+            stack: List[Tuple[Path, int]] = [(root, 0)]
+            while stack and len(bases) < 100:
+                current, depth = stack.pop()
+                try:
+                    add_base(current / ".stampede")
+                    if depth >= max_depth:
+                        continue
+                    for child in current.iterdir():
+                        if child.name.startswith(".") or child.name in {
+                            "Library",
+                            "Applications",
+                            "Pictures",
+                            "Movies",
+                            "Music",
+                            "node_modules",
+                            ".git",
+                            ".venv",
+                            "venv",
+                        }:
+                            continue
+                        if child.is_dir():
+                            stack.append((child, depth + 1))
+                except Exception:
+                    continue
+
+        for root in roots:
+            try:
+                if not root.exists() or not root.is_dir():
+                    continue
+                scan_depth(root, 2 if root == Path.home() else 3)
+            except Exception:
+                continue
+
+        self._bases_cache = list(bases.values())
+        self._last_base_scan = time.time()
+        return self._bases_cache
+
+    def _candidate_run_dirs(self) -> List[Path]:
+        runs: Dict[str, Path] = {}
+        for base in self._iter_stampede_bases():
+            try:
+                for run_dir in base.glob("run-*"):
+                    if run_dir.is_dir():
+                        runs[str(run_dir)] = run_dir
+            except Exception:
+                continue
+
+        def mtime(path: Path) -> float:
+            try:
+                return path.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        return sorted(runs.values(), key=mtime, reverse=True)[: self._RUN_DIR_LIMIT]
+
+    def _poll_ledger_events(self, ledger: Path, run_id: str, commander_id: str) -> None:
+        key = f"stampede-ledger:{ledger}"
+        try:
+            size = ledger.stat().st_size
+            last_off = self.store.get_log_offset(key)
+            if last_off > size:
+                last_off = 0
+            if size <= last_off:
+                return
+
+            with ledger.open("rb") as f:
+                f.seek(last_off)
+                chunk = f.read(size - last_off)
+            self.store.set_log_offset(key, size)
+        except Exception:
+            return
+
+        events: List[AgentEvent] = []
+        line_offset = last_off
+        for raw_line in chunk.splitlines():
+            source = f"stampede:{run_id}:{commander_id}:{line_offset}"
+            line_offset += len(raw_line) + 1
+            try:
+                data = json.loads(raw_line.decode("utf-8", errors="replace"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(data, dict) or data.get("event") != "launch_started":
+                continue
+
+            role = str(data.get("role") or data.get("agent_type") or "child")
+            if role == "squad_lead":
+                agent_type = "metaswarm-squad"
+            elif role == "worker":
+                agent_type = "metaswarm-worker"
+            else:
+                agent_type = "stampede-commander"
+
+            child_id = str(data.get("child_id") or data.get("id") or "child")
+            ts = parse_iso_ts(data.get("ts")) or now_ts()
+            events.append(
+                AgentEvent(
+                    ts=ts,
+                    agent_type=agent_type,
+                    name=f"{commander_id}/{child_id}",
+                    model=data.get("model") if isinstance(data.get("model"), str) else None,
+                    source=source,
+                    outcome="unknown",
+                )
+            )
+
+        self.store.insert_agent_events(events)
+
+    def _recent_children(self, ledger: Path, run_id: str, commander_id: str, limit: int = 6) -> List[MetaswarmChild]:
+        try:
+            size = ledger.stat().st_size
+            read_start = max(0, size - self._LEDGER_TAIL_BYTES)
+            with ledger.open("rb") as f:
+                f.seek(read_start)
+                text = f.read(size - read_start).decode("utf-8", errors="replace")
+        except Exception:
+            return []
+
+        latest: Dict[str, MetaswarmChild] = {}
+        for line in text.splitlines():
+            try:
+                data = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            child_id = data.get("child_id")
+            if not child_id:
+                continue
+            child_id = str(child_id)
+            event = str(data.get("event") or "update")
+            status = str(data.get("status") or event)
+            ts = parse_iso_ts(data.get("ts")) or now_ts()
+            latest[child_id] = MetaswarmChild(
+                ts=ts,
+                run_id=run_id,
+                commander_id=commander_id,
+                child_id=child_id,
+                role=str(data.get("role") or data.get("agent_type") or "child"),
+                event=event,
+                status=status,
+                model=data.get("model") if isinstance(data.get("model"), str) else None,
+            )
+
+        return sorted(latest.values(), key=lambda c: c.ts, reverse=True)[:limit]
+
+    def poll(self) -> List[MetaswarmRun]:
+        runs: List[MetaswarmRun] = []
+        now = now_ts()
+
+        for run_dir in self._candidate_run_dirs():
+            state = self._read_json(run_dir / "state.json")
+            fleet = self._read_json(run_dir / "fleet.json")
+            run_id = str(state.get("run_id") or run_dir.name)
+            profile = str(state.get("profile") or "metaswarm")
+            repo_path = str(state.get("repo_path") or run_dir.parent.parent)
+            commanders: List[MetaswarmCommander] = []
+
+            for commander_dir in sorted((run_dir / "commanders").glob("commander-*")):
+                commander_id = commander_dir.name
+                commander_state = self._read_json(commander_dir / "swarm-state.json")
+                telemetry = commander_state.get("telemetry", {})
+                if not isinstance(telemetry, dict):
+                    telemetry = {}
+                fleet_meta = fleet.get(commander_id, {}) if isinstance(fleet, dict) else {}
+                if not isinstance(fleet_meta, dict):
+                    fleet_meta = {}
+
+                ledger = commander_dir / "child-agents.jsonl"
+                if ledger.exists():
+                    self._poll_ledger_events(ledger, run_id, commander_id)
+                    recent_children = self._recent_children(ledger, run_id, commander_id)
+                else:
+                    recent_children = []
+
+                pid_status = "unknown"
+                pid_file = run_dir / "pids" / f"{commander_id}.pid"
+                if pid_file.exists():
+                    try:
+                        pid_status = "run" if self._pid_alive(pid_file.read_text().strip()) else "dead"
+                    except Exception:
+                        pid_status = "unknown"
+
+                hb_ts = parse_iso_ts(commander_state.get("last_heartbeat_at") or commander_state.get("updated_at"))
+                heartbeat_age = max(0, now - hb_ts) if hb_ts else None
+                commanders.append(
+                    MetaswarmCommander(
+                        run_id=run_id,
+                        commander_id=commander_id,
+                        model=(
+                            commander_state.get("model")
+                            if isinstance(commander_state.get("model"), str)
+                            else fleet_meta.get("model")
+                            if isinstance(fleet_meta.get("model"), str)
+                            else None
+                        ),
+                        status=str(commander_state.get("status") or "unknown"),
+                        phase=str(commander_state.get("phase") or "unknown"),
+                        pid_status=pid_status,
+                        squad_leads_launched=int(telemetry.get("squad_leads_launched") or 0),
+                        squad_leads_target=int(telemetry.get("squad_leads_target") or 0),
+                        workers_launched=int(telemetry.get("workers_launched") or 0),
+                        workers_target=int(telemetry.get("workers_target") or 0),
+                        workers_running=int(telemetry.get("workers_running") or 0),
+                        workers_completed=int(telemetry.get("workers_completed") or 0),
+                        workers_failed=int(telemetry.get("workers_failed") or 0),
+                        atoms_received=int(telemetry.get("atoms_received") or 0),
+                        heartbeat_age_s=heartbeat_age,
+                        recent_children=recent_children,
+                    )
+                )
+
+            if commanders:
+                runs.append(MetaswarmRun(run_id=run_id, repo_path=repo_path, profile=profile, commanders=commanders))
+
+        return runs
+
+    def live_agents(self, metaswarm_runs: Optional[List[MetaswarmRun]] = None) -> List[LiveAgent]:
+        """Return visible Stampede commanders/workers and recent nested children."""
+        now = now_ts()
+        live: List[LiveAgent] = []
+
+        for run_dir in self._candidate_run_dirs():
+            state = self._read_json(run_dir / "state.json")
+            fleet = self._read_json(run_dir / "fleet.json")
+            run_id = str(state.get("run_id") or run_dir.name)
+            try:
+                run_age_s = max(0, now - int(run_dir.stat().st_mtime))
+            except OSError:
+                run_age_s = 0
+            pids_dir = run_dir / "pids"
+            if pids_dir.exists():
+                for pid_file in sorted(pids_dir.glob("*.pid")):
+                    agent_id = pid_file.stem
+                    try:
+                        pid_text = pid_file.read_text().strip()
+                        pid = int(pid_text)
+                    except Exception:
+                        pid = None
+                    alive = self._pid_alive(pid) if pid is not None else False
+                    meta = fleet.get(agent_id, {}) if isinstance(fleet, dict) else {}
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    role = str(meta.get("role") or ("commander" if agent_id.startswith("commander-") else "worker"))
+                    if role == "commander":
+                        agent_type = "stampede-commander"
+                    elif role == "worker":
+                        agent_type = "stampede-agent"
+                    else:
+                        agent_type = role
+                    live.append(
+                        LiveAgent(
+                            source="stampede",
+                            agent_id=f"{run_id}/{agent_id}",
+                            agent_type=agent_type,
+                            name=agent_id,
+                            status="RUN" if alive else "DEAD",
+                            age_s=run_age_s,
+                            model=meta.get("model") if isinstance(meta.get("model"), str) else None,
+                            pid=pid,
+                            parent=run_id,
+                        )
+                    )
+
+        if metaswarm_runs is None:
+            metaswarm_runs = self.poll()
+
+        for run in metaswarm_runs:
+            for commander in run.commanders:
+                commander_active = (
+                    commander.pid_status == "run"
+                    or (
+                        commander.pid_status == "unknown"
+                        and commander.status in {"running", "starting"}
+                        and (commander.heartbeat_age_s is None or commander.heartbeat_age_s < 90)
+                    )
+                )
+                for child in commander.recent_children:
+                    if child.event in {"completed", "failed"}:
+                        status = "DONE" if child.status == "success" else child.status.upper()
+                    elif commander_active:
+                        status = "RUN"
+                    else:
+                        status = "STALE"
+                    if status in {"DONE", "SUCCESS"} and now - child.ts > 300:
+                        continue
+                    if status in {"STALE", "DEAD"} and now - child.ts > 1800:
+                        continue
+                    agent_type = "metaswarm-squad" if child.role == "squad_lead" else "metaswarm-worker" if child.role == "worker" else "custom"
+                    live.append(
+                        LiveAgent(
+                            source="metaswarm",
+                            agent_id=f"{run.run_id}/{commander.commander_id}/{child.child_id}",
+                            agent_type=agent_type,
+                            name=child.child_id,
+                            status=status,
+                            age_s=max(0, now - child.ts),
+                            model=child.model,
+                            parent=commander.commander_id,
+                        )
+                    )
+
+        return live
+
+
 # ----------------------------
 # SQLite Storage
 # ----------------------------
@@ -536,7 +1039,7 @@ class PulseStore:
         base = Path.home() / ".copilot" / "agent-pulse"
         base.mkdir(parents=True, exist_ok=True)
         self.db_path = base / "agent-pulse.db"
-        self._con = sqlite3.connect(self.db_path)
+        self._con = sqlite3.connect(self.db_path, timeout=5)
         self._con.execute("PRAGMA journal_mode=WAL")
         self._con.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
@@ -817,11 +1320,26 @@ class PulseStore:
         """
         cur = self._con.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM agent_events WHERE ts>=? AND outcome = 'unknown'",
+            "SELECT COUNT(*) FROM agent_events WHERE ts>=? AND outcome = 'unknown' AND agent_type NOT LIKE 'metaswarm-%'",
             (since_ts,),
         )
         row = cur.fetchone()
         return int(row[0]) if row and row[0] is not None else 0
+
+    def running_agent_events_since(self, since_ts: int, limit: int = 25) -> List[Tuple[int, str, Optional[str], Optional[str]]]:
+        """Return recent event-stream agents that still look in-flight."""
+        cur = self._con.cursor()
+        cur.execute(
+            """
+            SELECT ts, agent_type, name, model
+            FROM agent_events
+            WHERE ts>=? AND outcome = 'unknown' AND agent_type NOT LIKE 'metaswarm-%'
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            (since_ts, limit),
+        )
+        return [(int(r[0]), str(r[1]), r[2], r[3]) for r in cur.fetchall()]
 
     # Feature 2: Model distribution
     def model_distribution_since(self, since_ts: int) -> Dict[str, int]:
@@ -913,23 +1431,79 @@ class PulseMetrics:
     # Real-time sub-agent tracking
     running_subagents: int = 0
     subagents_last5m: int = 0
+    metaswarm_runs: List[MetaswarmRun] = None
+    metaswarm_active_commanders: int = 0
+    metaswarm_children_running: int = 0
+    metaswarm_children_last5m: int = 0
+    live_agents: List[LiveAgent] = None
 
     def __post_init__(self):
         if self.active_session_list is None:
             self.active_session_list = []
         if self.model_dist_24h is None:
             self.model_dist_24h = {}
+        if self.metaswarm_runs is None:
+            self.metaswarm_runs = []
+        if self.live_agents is None:
+            self.live_agents = []
 
 
 class MetricsEngine:
     def __init__(self, store: PulseStore) -> None:
         self.store = store
         self.procs = ProcessCollector()
+        self.tmux = TmuxPaneCollector()
         self.logs = CopilotLogTailer(store)
         self.events = SessionEventTailer(store)
+        self.stampede = StampedeTelemetryCollector(store)
         self._peak_velocity: float = 0.0
         self._started_at: float = time.time()
         self._session_start_times: Dict[str, float] = {}
+        self._process_start_times: Dict[int, float] = {}
+
+    @staticmethod
+    def _agent_type_from_cmd(cmd: str) -> str:
+        lower = cmd.lower()
+        for t in AGENT_TYPES:
+            if t in lower:
+                return t
+        if "copilot" in lower:
+            return "copilot"
+        return "process"
+
+    @staticmethod
+    def _model_from_cmd(cmd: str) -> Optional[str]:
+        match = re.search(r"(?:--model(?:=|\s+))([A-Za-z0-9._/-]+)", cmd)
+        if match:
+            return match.group(1)
+        return None
+
+    def _live_from_processes(self, procs: List[Proc], ts: int) -> List[LiveAgent]:
+        live: List[LiveAgent] = []
+        current_pids = {p.pid for p in procs}
+        for old_pid in list(self._process_start_times):
+            if old_pid not in current_pids:
+                self._process_start_times.pop(old_pid, None)
+
+        for p in procs:
+            if not (self.procs.is_copilot_process(p.cmd) or self.procs.is_agentish_process(p.cmd)):
+                continue
+            if p.pid not in self._process_start_times:
+                self._process_start_times[p.pid] = time.time()
+            live.append(
+                LiveAgent(
+                    source="process",
+                    agent_id=f"pid-{p.pid}",
+                    agent_type=self._agent_type_from_cmd(p.cmd),
+                    name=p.cmd[:80],
+                    status="RUN",
+                    age_s=max(0, int(time.time() - self._process_start_times[p.pid])),
+                    model=self._model_from_cmd(p.cmd),
+                    pid=p.pid,
+                    parent=f"tty:{p.tty}",
+                )
+            )
+        return live
 
     def poll(self) -> PulseMetrics:
         ts = now_ts()
@@ -971,6 +1545,8 @@ class MetricsEngine:
         self.logs.poll_new_events()
         # Session events.jsonl — the primary source of agent launches
         self.events.poll_new_events()
+        # Terminal Stampede metaswarm ledgers — source of truth for nested children.
+        metaswarm_runs = self.stampede.poll()
 
         agent_events_last5m = self.store.agent_events_count_since(ts - 5 * 60)
         spawned_all_time = self.store.total_spawned()
@@ -1004,10 +1580,86 @@ class MetricsEngine:
             notes={"sessions_by_tty": sessions_by_tty, "running_agents_est": running_agents_est},
         )
 
-        # Real-time sub-agent counts (in-flight = started, not yet completed, <30min old)
-        running_subagents_from_events = self.store.running_subagents_since(ts - 30 * 60)
-        # Combine with process-based signal; take the max so we never under-count.
-        running_subagents = max(running_subagents_from_events, running_agents_est)
+        # Real-time sub-agent counts. Event-stream rows without completion are only
+        # treated as live for a short window; long-lived runs should still be visible
+        # through process, tmux, or Stampede telemetry sources.
+        running_subagents_from_events = self.store.running_subagents_since(ts - 5 * 60)
+        def commander_is_active(c: MetaswarmCommander) -> bool:
+            if c.pid_status == "run":
+                return True
+            if c.pid_status == "dead":
+                return False
+            return c.status in {"running", "starting"} and (c.heartbeat_age_s is None or c.heartbeat_age_s < 90)
+
+        metaswarm_children_running = sum(
+            c.workers_running
+            for run in metaswarm_runs
+            for c in run.commanders
+            if commander_is_active(c)
+        )
+        metaswarm_active_commanders = sum(
+            1
+            for run in metaswarm_runs
+            for c in run.commanders
+            if commander_is_active(c)
+        )
+        metaswarm_type_counts = self.store.agent_events_by_type_since(ts - 5 * 60)
+        metaswarm_children_last5m = (
+            metaswarm_type_counts.get("metaswarm-squad", 0)
+            + metaswarm_type_counts.get("metaswarm-worker", 0)
+        )
+
+        live_agents: List[LiveAgent] = []
+        live_agents.extend(self._live_from_processes(procs, ts))
+        live_agents.extend(self.tmux.collect())
+        live_agents.extend(self.stampede.live_agents(metaswarm_runs))
+        for ev_ts, ev_type, ev_name, ev_model in self.store.running_agent_events_since(ts - 5 * 60):
+            if ev_type.startswith("metaswarm-"):
+                continue
+            live_agents.append(
+                LiveAgent(
+                    source="event",
+                    agent_id=f"event:{ev_type}:{ev_name or ev_ts}:{ev_ts}",
+                    agent_type=ev_type,
+                    name=ev_name or ev_type,
+                    status="IN-FLIGHT",
+                    age_s=max(0, ts - ev_ts),
+                    model=ev_model,
+                )
+            )
+
+        deduped_live: Dict[Tuple[str, str], LiveAgent] = {}
+        for item in live_agents:
+            key = (item.source, item.agent_id)
+            existing = deduped_live.get(key)
+            if existing is None or (existing.status != "RUN" and item.status == "RUN"):
+                deduped_live[key] = item
+        def live_rank(a: LiveAgent) -> Tuple[int, int, str, str]:
+            status = a.status.upper()
+            if status in {"RUN", "IN-FLIGHT"}:
+                rank = 0
+            elif "DEAD" in status or "FAIL" in status:
+                rank = 1
+            elif status == "STALE":
+                rank = 2
+            elif status in {"DONE", "SUCCESS"}:
+                rank = 3
+            else:
+                rank = 4
+            return (rank, a.age_s, a.source, a.agent_id)
+
+        live_agents = sorted(
+            deduped_live.values(),
+            key=live_rank,
+        )[:80]
+        live_running_count = sum(
+            1
+            for a in live_agents
+            if a.status in {"RUN", "IN-FLIGHT"} and a.agent_type != "stampede-monitor"
+        )
+
+        # Combine filesystem, process, and event signals; take max so we never under-count.
+        running_subagents = max(running_subagents_from_events, running_agents_est, metaswarm_children_running, live_running_count)
         subagents_last5m = agent_events_last5m
 
         # Feature 1: Success rate
@@ -1061,6 +1713,11 @@ class MetricsEngine:
             health_score=health_score,
             running_subagents=running_subagents,
             subagents_last5m=subagents_last5m,
+            metaswarm_runs=metaswarm_runs,
+            metaswarm_active_commanders=metaswarm_active_commanders,
+            metaswarm_children_running=metaswarm_children_running,
+            metaswarm_children_last5m=metaswarm_children_last5m,
+            live_agents=live_agents,
         )
 
 
@@ -1092,13 +1749,13 @@ class NeonLogo(Static):
         m = self.metrics
         heart = _HEARTBEATS[self.tick % len(_HEARTBEATS)]
         if m:
-            agents = m.running_agents_est
+            agents = m.running_subagents
             sessions = m.active_sessions
             monitor_line = Text.assemble(
                 (f"  {heart}  ", ""),
                 ("monitoring ", "#8D99AE"),
                 (str(agents), "bold #7CFF6B"),
-                (" agents across ", "#8D99AE"),
+                (" live runs across ", "#8D99AE"),
                 (str(sessions), "bold #00D1FF"),
                 (" active sessions", "#8D99AE"),
             )
@@ -1159,7 +1816,7 @@ class StatPanel(Static):
             bar(m.active_sessions),
         )
         t.add_row(
-            Text("Sub-Agents running:", style="bold white"),
+            Text("Live runs       :", style="bold white"),
             Text(str(m.running_subagents), style="bold #B388FF"),
             bar(m.running_subagents),
         )
@@ -1425,6 +2082,89 @@ class ActiveSessionsPanel(Static):
         return Panel(t, border_style="#00ff87", title="[bold #00ff87]▶ ACTIVE SESSIONS[/]")
 
 
+class LiveRunsPanel(Static):
+    """Unified live inventory: processes, tmux panes, Copilot events, and Stampede ledgers."""
+
+    metrics: Optional[PulseMetrics] = reactive(None)
+
+    def render(self) -> Panel:
+        m = self.metrics
+        if not m or not m.live_agents:
+            return Panel(
+                Text(
+                    "No live agents/runs detected.\n"
+                    "Scanning: processes · tmux panes · Copilot events · .stampede runs",
+                    style="#8D99AE",
+                ),
+                border_style="#00F5D4",
+                title="[bold #00F5D4]◉ LIVE RUNS · ANYWHERE[/]",
+            )
+
+        running = sum(
+            1
+            for a in m.live_agents
+            if a.status in {"RUN", "IN-FLIGHT"} and a.agent_type != "stampede-monitor"
+        )
+        title = (
+            f"[bold #00F5D4]◉ LIVE RUNS · ANYWHERE[/]  "
+            f"[#8D99AE]· running[/] [bold #7CFF6B]{running}[/]  "
+            f"[#8D99AE]· visible[/] [bold #FFD166]{len(m.live_agents)}[/]"
+        )
+
+        t = Table.grid(padding=(0, 1))
+        t.add_column("src", justify="left", width=10)
+        t.add_column("type", justify="left", min_width=15)
+        t.add_column("name", justify="left", min_width=24)
+        t.add_column("status", justify="center", width=11)
+        t.add_column("model", justify="left", min_width=12)
+        t.add_column("age", justify="right", width=6)
+
+        t.add_row(
+            Text("SOURCE", style="bold #8D99AE"),
+            Text("TYPE", style="bold #8D99AE"),
+            Text("RUN / AGENT", style="bold #8D99AE"),
+            Text("STATUS", style="bold #8D99AE"),
+            Text("MODEL", style="bold #8D99AE"),
+            Text("AGE", style="bold #8D99AE"),
+        )
+
+        for agent in m.live_agents[:18]:
+            color = TYPE_COLOR.get(agent.agent_type, TYPE_COLOR["custom"])
+            if agent.status in {"RUN", "IN-FLIGHT"}:
+                status_color = "#7CFF6B"
+            elif agent.status in {"DONE", "SUCCESS"}:
+                status_color = "#00D1FF"
+            elif "DEAD" in agent.status or "FAIL" in agent.status:
+                status_color = "#FF4D6D"
+            else:
+                status_color = "#FFD166"
+
+            name = agent.name
+            if len(name) > 38:
+                name = name[:35] + "..."
+            if agent.parent and agent.source in {"metaswarm", "stampede"}:
+                name = f"{agent.parent}/{name}"
+                if len(name) > 38:
+                    name = name[:35] + "..."
+
+            t.add_row(
+                Text(agent.source, style="#8D99AE"),
+                Text(agent.agent_type, style=f"bold {color}"),
+                Text(name, style="#C7F9CC"),
+                Text(agent.status, style=f"bold {status_color}"),
+                Text(shorten_model(agent.model) if agent.model else "—", style=model_color(agent.model) if agent.model else "#8D99AE"),
+                Text(human_age(agent.age_s), style="#8D99AE"),
+            )
+
+        foot = Text(
+            f"Metaswarm: {m.metaswarm_active_commanders} commanders · "
+            f"{m.metaswarm_children_running} workers running · "
+            f"{m.metaswarm_children_last5m} child launches in 5m",
+            style="#8D99AE",
+        )
+        return Panel(Group(t, "", foot), border_style="#00F5D4", title=title)
+
+
 BUILTIN_AGENTS = {
     "task":             ("⚙", "Execute commands, run tests/builds", "#00D1FF"),
     "explore":          ("⚡", "Fast codebase exploration & research", "#7CFF6B"),
@@ -1433,6 +2173,10 @@ BUILTIN_AGENTS = {
     "rubber-duck":      ("🦆", "Interactive debugging companion", "#FFD166"),
     "dispatch-worker":  ("📡", "Parallel multi-terminal worker", "#00F5D4"),
     "stampede-agent":   ("🐎", "Stampede orchestration worker", "#FF9F1C"),
+    "stampede-monitor": ("📊", "Stampede monitor pane", "#8D99AE"),
+    "stampede-commander": ("🦬", "Metaswarm commander pane", "#FF9F1C"),
+    "metaswarm-squad":  ("⬢", "Metaswarm squad lead", "#FFD166"),
+    "metaswarm-worker": ("◆", "Metaswarm leaf worker", "#00F5D4"),
     "swarm-command":    ("🐝", "Multi-model swarm orchestrator", "#80FFDB"),
 }
 
@@ -1711,9 +2455,14 @@ class AgentPulseApp(App):
                 id="row3_grid",
             ),
             Grid(
+                LiveRunsPanel(id="live_runs"),
                 ActiveSessionsPanel(id="sessions"),
-                InstalledAgentsPanel(id="installed"),
                 id="row4_grid",
+            ),
+            Grid(
+                InstalledAgentsPanel(id="installed"),
+                TokenUsagePanel(self.store, id="tokens"),
+                id="row5_grid",
             ),
             Vertical(
                 GlowTitle("RECENT LAUNCHES", id="recent_title"),
@@ -1731,7 +2480,9 @@ class AgentPulseApp(App):
         self.history = self.query_one("#history", HistoryPanel)
         self.mix = self.query_one("#mix", MixPanel)
         self.model_dist = self.query_one("#model_dist", ModelDistPanel)
+        self.live_runs = self.query_one("#live_runs", LiveRunsPanel)
         self.sessions_panel = self.query_one("#sessions", ActiveSessionsPanel)
+        self.tokens = self.query_one("#tokens", TokenUsagePanel)
         self.recent_title = self.query_one("#recent_title", GlowTitle)
         self.recent = self.query_one("#recent", RecentTable)
 
@@ -1748,7 +2499,7 @@ class AgentPulseApp(App):
         if width is None:
             width = self.size.width
         narrow = width < 100
-        for grid_id in ("#row1_grid", "#row2_grid", "#row3_grid", "#row4_grid"):
+        for grid_id in ("#row1_grid", "#row2_grid", "#row3_grid", "#row4_grid", "#row5_grid"):
             try:
                 grid = self.query_one(grid_id, Grid)
                 if narrow:
@@ -1800,6 +2551,13 @@ class AgentPulseApp(App):
                 "tokens_today": m.tokens_today,
                 "cost_estimate_today": m.cost_estimate_today,
                 "model_dist_24h": m.model_dist_24h,
+                "live_agents": [dataclasses.asdict(a) for a in m.live_agents],
+                "metaswarm": {
+                    "active_commanders": m.metaswarm_active_commanders,
+                    "children_running": m.metaswarm_children_running,
+                    "children_last5m": m.metaswarm_children_last5m,
+                    "runs": [dataclasses.asdict(r) for r in m.metaswarm_runs],
+                },
             }
             with open(export_path, "w") as f:
                 json.dump(data, f, indent=2)
@@ -1846,14 +2604,16 @@ class AgentPulseApp(App):
         self.history.metrics = m
         self.mix.metrics = m
         self.model_dist.metrics = m
+        self.live_runs.metrics = m
         self.sessions_panel.metrics = m
+        self.tokens.metrics = m
         self.recent.update_rows(m.recent_events)
 
     def on_shutdown(self) -> None:
         self.store.close()
 
 
-VERSION = "2.3.1"
+VERSION = "2.4.0"
 
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
@@ -1924,6 +2684,13 @@ def _mode_export() -> None:
         "tokens_today": m.tokens_today,
         "cost_estimate_today": m.cost_estimate_today,
         "model_dist_24h": m.model_dist_24h,
+        "live_agents": [dataclasses.asdict(a) for a in m.live_agents],
+        "metaswarm": {
+            "active_commanders": m.metaswarm_active_commanders,
+            "children_running": m.metaswarm_children_running,
+            "children_last5m": m.metaswarm_children_last5m,
+            "runs": [dataclasses.asdict(r) for r in m.metaswarm_runs],
+        },
         "installed_agents": [a[0] for a in discover_installed_agents()],
     }
     store.close()

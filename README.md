@@ -49,6 +49,7 @@ Agent Pulse is a **real-time terminal dashboard** that monitors your GitHub Copi
 | Feature | Description |
 |---------|-------------|
 | 🖥️ **Live Session Tracking** | Real-time monitoring of active Copilot CLI terminal sessions |
+| ◉ **Live Runs Anywhere** | Unified inventory of active processes, tmux panes, Copilot event-stream agents, and Stampede/metaswarm runs |
 | 🤖 **Agent Monitoring** | Track 15+ agent types: task, explore, general-purpose, rubber-duck, code-review, and custom agents |
 | 📊 **14-Day Trend Analysis** | Sparklines, daily breakdowns, gradient bar charts, and trend arrows |
 | 🔥 **24h Activity Heatmap** | Hourly session density visualization with `░▒▓█` blocks |
@@ -156,6 +157,8 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 | Process table | `ps aux` | Active Copilot CLI processes (PID, CPU, MEM) |
 | Session store | `~/.copilot/session-store.db` | Total/daily/weekly/monthly session counts, turn counts |
 | Session state | `~/.copilot/session-state/` | Active sessions, lock files, event streams |
+| tmux panes | `tmux list-panes -a` | Visible pane-backed agent runs, including Stampede commanders |
+| Stampede runs | `.stampede/run-*/` under common work roots | Commander PIDs, `swarm-state.json`, and `child-agents.jsonl` nested metaswarm telemetry |
 | Agent registry | `~/.copilot/agents/` | Installed agent definitions |
 | History cache | `~/.copilot/agent-pulse/history.json` | Persistent daily statistics |
 
@@ -191,6 +194,11 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 ### Active Sessions
 - Live table of running Copilot CLI sessions
 - Session ID, PID, agent type, status, and runtime
+
+### Live Runs Anywhere
+- Unified live inventory of process-backed agents, tmux panes, in-flight Copilot event agents, and Stampede/metaswarm ledgers
+- Shows run/agent name, source, status, model, age, and nested child counts
+- Set `AGENT_PULSE_SCAN_ROOTS=/path/one:/path/two` to include additional work roots for `.stampede` discovery
 
 ### Installed Agents
 - Auto-discovered agent registry from `~/.copilot/agents/`
