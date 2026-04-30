@@ -171,11 +171,7 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 - ASCII art title with animated pulse wave (`▁▂▃▄▅▆▇█▇▆▅▄▃▂`)
 - Heartbeat animation, uptime counter, live clock
 - Dynamic border: green when active, cyan when idle
-
-### Live Metrics
-- Active sessions, processes, and 24h agent count
-- Gradient bar charts (green → yellow → red)
-- Peak concurrent, agent velocity, last agent launched
+- Top-of-screen live metrics: total agents, live agents, live sub-agents, active sessions, hierarchy counts, 5-minute launches, velocity, and today's launch total
 
 ### Heatmap + Signal
 - 24h activity heatmap with `░▒▓█` density blocks

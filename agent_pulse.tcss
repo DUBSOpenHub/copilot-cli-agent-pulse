@@ -16,7 +16,7 @@ Screen {
   margin: 1 2 0 2;
 }
 
-#row1_grid, #row2_grid, #row3_grid, #row4_grid {
+#row1_grid, #row2_grid, #row3_grid {
   grid-size: 2;
   grid-columns: 1fr 1fr;
   grid-rows: auto;
@@ -25,9 +25,15 @@ Screen {
   margin: 0 2;
 }
 
-#stats, #history, #mix, #signal, #health, #model_dist, #live_runs, #sessions {
+#history, #mix, #signal, #health, #model_dist, #live_runs {
   height: 100%;
   min-width: 36;
+}
+
+#sessions {
+  height: auto;
+  min-width: 36;
+  margin: 0 2;
 }
 
 #installed {
