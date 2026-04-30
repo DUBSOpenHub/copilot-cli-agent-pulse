@@ -176,8 +176,9 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 - Top dashboard box with active sessions, total live agents, live sub-agents, hierarchy counts, 5-minute launches, velocity, and today's launch total
 - Separate level counts for division commanders, commanders, squad leads, sub-agents, reviewers, and other
 
-### Recent Launches
-- Recent Launches sits directly under the top row so new agents are easy to spot
+### Trend Analysis + Heatmap
+- Trend Analysis and Heatmap + Signal sit directly under the top row as boxes three and four
+- On wide terminals they render side by side; on narrow terminals they stack
 
 ### Launch Breakdown + Active Sessions
 - Launch Event Breakdown and Active Sessions render side by side on wide terminals, then stack on narrow terminals
@@ -185,14 +186,8 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 ### Model Distribution + Live Runs
 - Model Distribution and Live Runs render side by side on wide terminals, then stack on narrow terminals
 
-### Heatmap + Signal
-- 24h activity heatmap with `░▒▓█` density blocks
-- Real-time session and launch sparklines (rolling 4-min window)
-
-### Trend Analysis
-- 7-day daily breakdown with gradient bars
-- 14-day sparklines with trend arrows (↑↓→)
-- Session and agent counts side-by-side
+### Recent Launches
+- Recent Launches sits below the analysis row so new agents are still easy to spot
 
 ### Agent Breakdown
 - Stacked distribution bar by agent type
