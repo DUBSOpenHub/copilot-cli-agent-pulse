@@ -2739,8 +2739,8 @@ class AgentPulseApp(App):
         yield Vertical(
             NeonLogo(id="logo"),
             Grid(
-                StatPanel(id="stats"),
                 HealthGauge(id="health"),
+                StatPanel(id="stats"),
                 id="row1_grid",
             ),
             Grid(

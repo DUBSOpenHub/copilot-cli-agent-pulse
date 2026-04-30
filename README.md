@@ -173,7 +173,7 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 - Dynamic border: green when active, cyan when idle
 
 ### Live Metrics
-- Top dashboard box with active sessions, total live agents, live sub-agents, hierarchy counts, 5-minute launches, velocity, and today's launch total
+- Second dashboard box with active sessions, total live agents, live sub-agents, hierarchy counts, 5-minute launches, velocity, and today's launch total
 - Separate level counts for division commanders, commanders, squad leads, sub-agents, reviewers, and other
 
 ### Trend Analysis + Heatmap
