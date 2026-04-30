@@ -73,9 +73,13 @@ AGENT_TYPES = (
     "stampede-agent",
     "stampede-monitor",
     "stampede-commander",
+    "metaswarm-division",
+    "metaswarm-commander",
     "metaswarm-swarm",
     "metaswarm-squad",
+    "metaswarm-sub-agent",
     "metaswarm-worker",
+    "metaswarm-reviewer",
     "swarm-command",
 )
 
@@ -92,9 +96,13 @@ TYPE_COLOR: Dict[str, str] = {
     "stampede-agent": "#FF9F1C",
     "stampede-monitor": "#8D99AE",
     "stampede-commander": "#FF9F1C",
+    "metaswarm-division": "#B388FF",
+    "metaswarm-commander": "#FF9F1C",
     "metaswarm-swarm": "#80FFDB",
     "metaswarm-squad": "#FFD166",
+    "metaswarm-sub-agent": "#00F5D4",
     "metaswarm-worker": "#00F5D4",
+    "metaswarm-reviewer": "#FF4D6D",
     "swarm-command": "#80FFDB",
     "custom": "#C7F9CC",
     "unknown": "#8D99AE",
@@ -334,8 +342,12 @@ class MetaswarmCommander:
     child_agents_completed: int = 0
     child_agents_failed: int = 0
     child_agents_stale: int = 0
+    division_commanders_seen: int = 0
+    commanders_seen: int = 0
     squad_leads_seen: int = 0
     workers_seen: int = 0
+    reviewers_seen: int = 0
+    other_children_seen: int = 0
     recent_children: List[MetaswarmChild] = field(default_factory=list)
 
 
@@ -364,6 +376,26 @@ def empty_level_counts() -> Dict[str, int]:
     return {key: 0 for key in LEVEL_KEYS}
 
 
+def empty_child_counts() -> Dict[str, int]:
+    counts = {
+        "total": 0,
+        "completed": 0,
+        "failed": 0,
+        "in_progress": 0,
+    }
+    counts.update(empty_level_counts())
+    return counts
+
+
+def display_agent_type(agent_type: str) -> str:
+    """Map legacy/internal type names to user-facing dashboard labels."""
+    return {
+        "metaswarm-worker": "metaswarm-sub-agent",
+        "stampede-agent": "stampede-sub-agent",
+        "dispatch-worker": "dispatch-sub-agent",
+    }.get(agent_type, agent_type)
+
+
 def classify_agent_level(
     agent_type: str,
     name: Optional[str] = None,
@@ -381,25 +413,25 @@ def classify_agent_level(
 
     if normalized_type == "metaswarm-swarm":
         return "other"
-    if normalized_type in {"metaswarm-squad"} or "squad" in haystack:
-        return "squad_leads"
-    if normalized_type in {"metaswarm-worker", "stampede-agent", "dispatch-worker"}:
-        return "workers"
-    if normalized_type in {"task", "explore"}:
-        return "workers"
-    if normalized_type == "code-review" or "reviewer" in haystack or "code-review" in haystack:
-        return "reviewers"
-    if "division" in haystack or "div-" in haystack:
+    if normalized_type == "metaswarm-division" or "division" in haystack or "div-" in haystack:
         return "division_commanders"
     if (
-        normalized_type in {"swarm-command", "stampede-commander"}
+        normalized_type in {"metaswarm-commander", "swarm-command", "stampede-commander"}
         or "commander" in haystack
         or "cmd-" in haystack
         or "hive-auth-" in haystack
         or "hive1k" in haystack
     ):
         return "commanders"
-    if "worker" in haystack or "leaf" in haystack or "validator" in haystack:
+    if normalized_type in {"metaswarm-squad"} or "squad" in haystack:
+        return "squad_leads"
+    if normalized_type in {"metaswarm-reviewer", "code-review"} or "reviewer" in haystack or "code-review" in haystack:
+        return "reviewers"
+    if normalized_type in {"metaswarm-sub-agent", "metaswarm-worker", "stampede-agent", "dispatch-worker"}:
+        return "workers"
+    if normalized_type in {"task", "explore"}:
+        return "workers"
+    if "worker" in haystack or "sub-agent" in haystack or "subagent" in haystack or "leaf" in haystack or "validator" in haystack:
         return "workers"
     if "lead" in haystack:
         return "squad_leads"
@@ -409,6 +441,8 @@ def classify_agent_level(
 def count_agent_levels(agents: Sequence[LiveAgent], *, running_only: bool = True) -> Dict[str, int]:
     counts = empty_level_counts()
     for agent in agents:
+        if agent.agent_type in {"metaswarm-swarm", "stampede-monitor"}:
+            continue
         if running_only and agent.status not in {"RUN", "IN-FLIGHT"}:
             continue
         level = classify_agent_level(
@@ -419,6 +453,22 @@ def count_agent_levels(agents: Sequence[LiveAgent], *, running_only: bool = True
         )
         counts[level] = counts.get(level, 0) + 1
     return counts
+
+
+def agent_type_for_child_role(role: object, child_id: object = None) -> str:
+    text = str(role or "child")
+    level = classify_agent_level(text, str(child_id or ""))
+    if level == "division_commanders":
+        return "metaswarm-division"
+    if level == "commanders":
+        return "metaswarm-commander"
+    if level == "squad_leads":
+        return "metaswarm-squad"
+    if level == "workers":
+        return "metaswarm-sub-agent"
+    if level == "reviewers":
+        return "metaswarm-reviewer"
+    return "custom"
 
 
 class ProcessCollector:
@@ -890,15 +940,9 @@ class StampedeTelemetryCollector:
             if not isinstance(data, dict) or data.get("event") != "launch_started":
                 continue
 
-            role = str(data.get("role") or data.get("agent_type") or "child")
-            if role == "squad_lead":
-                agent_type = "metaswarm-squad"
-            elif role == "worker":
-                agent_type = "metaswarm-worker"
-            else:
-                agent_type = "stampede-commander"
-
             child_id = str(data.get("child_id") or data.get("id") or "child")
+            role = str(data.get("role") or data.get("agent_type") or "child")
+            agent_type = agent_type_for_child_role(role, child_id)
             ts = parse_iso_ts(data.get("ts")) or now_ts()
             events.append(
                 AgentEvent(
@@ -921,14 +965,7 @@ class StampedeTelemetryCollector:
                 f.seek(read_start)
                 text = f.read(size - read_start).decode("utf-8", errors="replace")
         except Exception:
-            return [], {
-                "total": 0,
-                "completed": 0,
-                "failed": 0,
-                "in_progress": 0,
-                "squad_leads": 0,
-                "workers": 0,
-            }
+            return [], empty_child_counts()
 
         latest: Dict[str, MetaswarmChild] = {}
         for line in text.splitlines():
@@ -961,21 +998,13 @@ class StampedeTelemetryCollector:
                 model=model,
             )
 
-        counts = {
-            "total": len(latest),
-            "completed": 0,
-            "failed": 0,
-            "in_progress": 0,
-            "squad_leads": 0,
-            "workers": 0,
-        }
+        counts = empty_child_counts()
+        counts["total"] = len(latest)
         for child in latest.values():
             status = child.status.lower()
             event = child.event.lower()
-            if child.role == "squad_lead":
-                counts["squad_leads"] += 1
-            elif child.role == "worker":
-                counts["workers"] += 1
+            level = classify_agent_level(child.role, child.child_id)
+            counts[level] = counts.get(level, 0) + 1
             if event == "completed" or status in {"success", "done", "completed"}:
                 counts["completed"] += 1
             elif event == "failed" or status in {"failed", "error"}:
@@ -1013,14 +1042,7 @@ class StampedeTelemetryCollector:
                     recent_children, child_counts = self._ledger_children(ledger, run_id, commander_id)
                 else:
                     recent_children = []
-                    child_counts = {
-                        "total": 0,
-                        "completed": 0,
-                        "failed": 0,
-                        "in_progress": 0,
-                        "squad_leads": 0,
-                        "workers": 0,
-                    }
+                    child_counts = empty_child_counts()
 
                 pid_status = "unknown"
                 pid_file = run_dir / "pids" / f"{commander_id}.pid"
@@ -1069,8 +1091,12 @@ class StampedeTelemetryCollector:
                         child_agents_completed=int(child_counts.get("completed") or 0),
                         child_agents_failed=int(child_counts.get("failed") or 0),
                         child_agents_stale=0 if commander_active else child_in_progress,
+                        division_commanders_seen=int(child_counts.get("division_commanders") or 0),
+                        commanders_seen=int(child_counts.get("commanders") or 0),
                         squad_leads_seen=int(child_counts.get("squad_leads") or 0),
                         workers_seen=int(child_counts.get("workers") or 0),
+                        reviewers_seen=int(child_counts.get("reviewers") or 0),
+                        other_children_seen=int(child_counts.get("other") or 0),
                         recent_children=recent_children,
                     )
                 )
@@ -1084,6 +1110,7 @@ class StampedeTelemetryCollector:
         """Return visible Stampede commanders/workers and recent nested children."""
         now = now_ts()
         live: List[LiveAgent] = []
+        seen_stampede_agents: set[str] = set()
 
         for run_dir in self._candidate_run_dirs():
             state = self._read_json(run_dir / "state.json")
@@ -1112,7 +1139,7 @@ class StampedeTelemetryCollector:
                     elif role == "worker":
                         agent_type = "stampede-agent"
                     else:
-                        agent_type = role
+                        agent_type = agent_type_for_child_role(role, agent_id)
                     live.append(
                         LiveAgent(
                             source="stampede",
@@ -1126,12 +1153,14 @@ class StampedeTelemetryCollector:
                             parent=run_id,
                         )
                     )
+                    seen_stampede_agents.add(f"{run_id}/{agent_id}")
 
         if metaswarm_runs is None:
             metaswarm_runs = self.poll()
 
         for run in metaswarm_runs:
             for commander in run.commanders:
+                commander_agent_id = f"{run.run_id}/{commander.commander_id}"
                 commander_active = (
                     commander.pid_status == "run"
                     or (
@@ -1140,6 +1169,29 @@ class StampedeTelemetryCollector:
                         and (commander.heartbeat_age_s is None or commander.heartbeat_age_s < 90)
                     )
                 )
+                if commander_agent_id not in seen_stampede_agents:
+                    if commander.status == "blocked":
+                        commander_status = "BLOCKED"
+                    elif commander.status in {"failed", "error"}:
+                        commander_status = "FAILED"
+                    elif commander.status in {"success", "done", "completed"}:
+                        commander_status = "DONE"
+                    elif commander_active:
+                        commander_status = "RUN"
+                    else:
+                        commander_status = "STALE"
+                    live.append(
+                        LiveAgent(
+                            source="metaswarm",
+                            agent_id=commander_agent_id,
+                            agent_type="stampede-commander",
+                            name=f"{commander.commander_id} · {commander.phase}",
+                            status=commander_status,
+                            age_s=commander.heartbeat_age_s or 0,
+                            model=commander.model,
+                            parent=run.run_id,
+                        )
+                    )
                 if commander.child_agents_seen:
                     summary_status = "RUN" if commander_active and commander.child_agents_running else "STALE" if commander.child_agents_stale else "DONE"
                     live.append(
@@ -1149,7 +1201,9 @@ class StampedeTelemetryCollector:
                             agent_type="metaswarm-swarm",
                             name=(
                                 f"children {commander.child_agents_seen} "
-                                f"(sq {commander.squad_leads_seen}, wkr {commander.workers_seen}; "
+                                f"(div {commander.division_commanders_seen}, cmd {commander.commanders_seen}, "
+                                f"sq {commander.squad_leads_seen}, wkr {commander.workers_seen}, "
+                                f"rev {commander.reviewers_seen}, other {commander.other_children_seen}; "
                                 f"run {commander.child_agents_running}, stale {commander.child_agents_stale}, "
                                 f"done {commander.child_agents_completed}, fail {commander.child_agents_failed})"
                             ),
@@ -1170,7 +1224,7 @@ class StampedeTelemetryCollector:
                         continue
                     if status in {"STALE", "DEAD"} and now - child.ts > 1800:
                         continue
-                    agent_type = "metaswarm-squad" if child.role == "squad_lead" else "metaswarm-worker" if child.role == "worker" else "custom"
+                    agent_type = agent_type_for_child_role(child.role, child.child_id)
                     live.append(
                         LiveAgent(
                             source="metaswarm",
@@ -1792,9 +1846,10 @@ class MetricsEngine:
             if commander_is_active(c)
         )
         metaswarm_type_counts = self.store.agent_events_by_type_since(ts - 5 * 60)
-        metaswarm_children_last5m = (
-            metaswarm_type_counts.get("metaswarm-squad", 0)
-            + metaswarm_type_counts.get("metaswarm-worker", 0)
+        metaswarm_children_last5m = sum(
+            count
+            for agent_type, count in metaswarm_type_counts.items()
+            if agent_type.startswith("metaswarm-") and agent_type != "metaswarm-swarm"
         )
 
         live_agents: List[LiveAgent] = []
@@ -2019,7 +2074,8 @@ class StatPanel(Static):
         t.add_column(justify="right")
         t.add_column(justify="left")
         levels = m.live_level_counts or empty_level_counts()
-        commanders = levels.get("division_commanders", 0) + levels.get("commanders", 0)
+        division_commanders = levels.get("division_commanders", 0)
+        commanders = levels.get("commanders", 0)
         t.add_row(
             Text("Sessions        :", style="bold white"),
             Text(str(m.active_sessions), style="bold #7CFF6B"),
@@ -2029,6 +2085,11 @@ class StatPanel(Static):
             Text("All live levels :", style="bold white"),
             Text(str(m.total_live_agents), style="bold #B388FF"),
             bar(m.total_live_agents),
+        )
+        t.add_row(
+            Text("Division cmds   :", style="bold white"),
+            Text(str(division_commanders), style="bold #B388FF"),
+            bar(division_commanders),
         )
         t.add_row(
             Text("Commanders      :", style="bold white"),
@@ -2049,6 +2110,11 @@ class StatPanel(Static):
             Text("Reviewers       :", style="bold white"),
             Text(str(levels.get("reviewers", 0)), style="bold #FF4D6D"),
             bar(levels.get("reviewers", 0)),
+        )
+        t.add_row(
+            Text("Other           :", style="bold white"),
+            Text(str(levels.get("other", 0)), style="bold #8D99AE"),
+            bar(levels.get("other", 0)),
         )
         t.add_row(
             Text("Launch events 5m:", style="bold white"),
@@ -2336,13 +2402,16 @@ class LiveRunsPanel(Static):
             if a.status in {"RUN", "IN-FLIGHT"} and a.agent_type != "stampede-monitor"
         )
         levels = m.live_level_counts or empty_level_counts()
-        commanders = levels.get("division_commanders", 0) + levels.get("commanders", 0)
+        division_commanders = levels.get("division_commanders", 0)
+        commanders = levels.get("commanders", 0)
         title = (
             f"[bold #00F5D4]◉ LIVE RUNS + SWARM SUB-AGENTS[/]  "
             f"[#8D99AE]· running[/] [bold #7CFF6B]{running}[/]  "
+            f"[#8D99AE]· div[/] [bold #B388FF]{division_commanders}[/]  "
             f"[#8D99AE]· cmd[/] [bold #00F5D4]{commanders}[/]  "
             f"[#8D99AE]· squads[/] [bold #FFD166]{levels.get('squad_leads', 0)}[/]  "
-            f"[#8D99AE]· workers[/] [bold #7CFF6B]{levels.get('workers', 0)}[/]"
+            f"[#8D99AE]· workers[/] [bold #7CFF6B]{levels.get('workers', 0)}[/]  "
+            f"[#8D99AE]· rev[/] [bold #FF4D6D]{levels.get('reviewers', 0)}[/]"
         )
 
         t = Table.grid(padding=(0, 1))
@@ -2390,7 +2459,8 @@ class LiveRunsPanel(Static):
             )
 
         foot = Text(
-            f"Levels now: {commanders} commanders · "
+            f"Levels now: {division_commanders} division commanders · "
+            f"{commanders} commanders · "
             f"{levels.get('squad_leads', 0)} squad leads · "
             f"{levels.get('workers', 0)} workers · "
             f"{levels.get('reviewers', 0)} reviewers · "
@@ -2415,9 +2485,12 @@ BUILTIN_AGENTS = {
     "stampede-agent":   ("🐎", "Stampede orchestration worker", "#FF9F1C"),
     "stampede-monitor": ("📊", "Stampede monitor pane", "#8D99AE"),
     "stampede-commander": ("🦬", "Metaswarm commander pane", "#FF9F1C"),
+    "metaswarm-division": ("◈", "Metaswarm division commander", "#B388FF"),
+    "metaswarm-commander": ("◇", "Metaswarm commander", "#FF9F1C"),
     "metaswarm-swarm":  ("🐝", "Swarm child-agent summary", "#80FFDB"),
     "metaswarm-squad":  ("⬢", "Metaswarm squad lead", "#FFD166"),
     "metaswarm-worker": ("◆", "Metaswarm leaf worker", "#00F5D4"),
+    "metaswarm-reviewer": ("🔍", "Metaswarm reviewer", "#FF4D6D"),
     "swarm-command":    ("🐝", "Multi-model swarm orchestrator", "#80FFDB"),
 }
 
