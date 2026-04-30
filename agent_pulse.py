@@ -2739,12 +2739,12 @@ class AgentPulseApp(App):
         yield Vertical(
             NeonLogo(id="logo"),
             Grid(
-                HealthGauge(id="health"),
+                HistoryPanel(self.store, id="history"),
                 StatPanel(id="stats"),
                 id="row1_grid",
             ),
             Grid(
-                HistoryPanel(self.store, id="history"),
+                HealthGauge(id="health"),
                 SignalPanel(self.store, id="signal"),
                 id="row2_grid",
             ),

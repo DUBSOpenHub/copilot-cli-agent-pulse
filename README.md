@@ -172,12 +172,15 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 - Heartbeat animation, uptime counter, live clock
 - Dynamic border: green when active, cyan when idle
 
+### Trend Analysis
+- First dashboard box with 7-day daily breakdowns, 14-day sparklines, trend arrows, and session/agent counts
+
 ### Live Metrics
 - Second dashboard box with active sessions, total live agents, live sub-agents, hierarchy counts, 5-minute launches, velocity, and today's launch total
 - Separate level counts for division commanders, commanders, squad leads, sub-agents, reviewers, and other
 
-### Trend Analysis + Heatmap
-- Trend Analysis and Heatmap + Signal sit directly under the top row as boxes three and four
+### Fleet Health + Heatmap
+- Fleet Health and Heatmap + Signal sit directly under the top row as boxes three and four
 - On wide terminals they render side by side; on narrow terminals they stack
 
 ### Launch Breakdown + Active Sessions
