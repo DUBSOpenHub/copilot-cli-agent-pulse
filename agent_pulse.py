@@ -2081,6 +2081,94 @@ class NeonLogo(Static):
         )
 
 
+class StatPanel(Static):
+    metrics: Optional[PulseMetrics] = reactive(None)
+    tick: int = reactive(0)
+
+    def render(self) -> Panel:
+        m = self.metrics
+        if not m:
+            return Panel("Initializing…", border_style="#00D1FF", title="[bold #00D1FF]● LIVE METRICS[/]")
+
+        lamp_color = "green" if m.active_sessions > 0 else "yellow"
+        lamp = Text("●", style=f"bold {lamp_color}")
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[self.tick % 10]
+
+        def bar(val: int, max_val: int = 20, width: int = 16) -> Text:
+            filled = int(round((val / max(max_val, 1)) * width))
+            filled = max(0, min(width, filled))
+            return Text("█" * filled + "░" * (width - filled), style="bold #7CFF6B")
+
+        t = Table.grid(padding=(0, 2))
+        t.add_column(justify="left")
+        t.add_column(justify="right")
+        t.add_column(justify="left")
+        levels = m.live_level_counts or empty_level_counts()
+        division_commanders = levels.get("division_commanders", 0)
+        commanders = levels.get("commanders", 0)
+        t.add_row(
+            Text("Sessions        :", style="bold white"),
+            Text(str(m.active_sessions), style="bold #7CFF6B"),
+            bar(m.active_sessions),
+        )
+        t.add_row(
+            Text("All live agents :", style="bold white"),
+            Text(str(m.total_live_agents), style="bold #B388FF"),
+            bar(m.total_live_agents),
+        )
+        t.add_row(
+            Text("Division cmds   :", style="bold white"),
+            Text(str(division_commanders), style="bold #B388FF"),
+            bar(division_commanders),
+        )
+        t.add_row(
+            Text("Commanders      :", style="bold white"),
+            Text(str(commanders), style="bold #00F5D4"),
+            bar(commanders),
+        )
+        t.add_row(
+            Text("Squad leads     :", style="bold white"),
+            Text(str(levels.get("squad_leads", 0)), style="bold #FFD166"),
+            bar(levels.get("squad_leads", 0)),
+        )
+        t.add_row(
+            Text("Sub-agents      :", style="bold white"),
+            Text(str(levels.get("workers", 0)), style="bold #7CFF6B"),
+            bar(levels.get("workers", 0)),
+        )
+        t.add_row(
+            Text("Reviewers       :", style="bold white"),
+            Text(str(levels.get("reviewers", 0)), style="bold #FF4D6D"),
+            bar(levels.get("reviewers", 0)),
+        )
+        t.add_row(
+            Text("Other           :", style="bold white"),
+            Text(str(levels.get("other", 0)), style="bold #8D99AE"),
+            bar(levels.get("other", 0)),
+        )
+        t.add_row(
+            Text("Launch events 5m:", style="bold white"),
+            Text(str(m.subagents_last5m), style="bold #00F5D4"),
+            bar(m.subagents_last5m),
+        )
+        t.add_row(
+            Text("Velocity         :", style="bold white"),
+            Text(f"{m.velocity}/hr", style="bold #FFD166"),
+            Text(f"peak: {m.peak_velocity}/hr", style="#8D99AE"),
+        )
+        trend = "▲ trending up" if m.spawned_today > 0 else "—"
+        t.add_row(
+            Text("Launches today  :", style="bold white"),
+            Text(str(m.spawned_today), style="bold #FF4D6D"),
+            Text(trend, style="#8D99AE"),
+        )
+
+        status_line = Text.assemble(
+            spinner, " ", ("LIVE", "bold #00F5D4"), "  ", lamp, "  ", ("PULSE LOCK", "bold #8D99AE")
+        )
+        return Panel(Group(t, "", status_line), border_style="#00D1FF", title="[bold #00D1FF]● LIVE METRICS[/]")
+
+
 class HistoryPanel(Static):
     """14-day trend analysis with sparklines and daily breakdowns."""
     metrics: Optional[PulseMetrics] = reactive(None)
@@ -2651,21 +2739,25 @@ class AgentPulseApp(App):
         yield Vertical(
             NeonLogo(id="logo"),
             Grid(
+                StatPanel(id="stats"),
                 HealthGauge(id="health"),
-                HistoryPanel(self.store, id="history"),
                 id="row1_grid",
             ),
             Grid(
+                HistoryPanel(self.store, id="history"),
                 SignalPanel(self.store, id="signal"),
-                MixPanel(id="mix"),
                 id="row2_grid",
             ),
             Grid(
+                MixPanel(id="mix"),
                 ModelDistPanel(id="model_dist"),
-                LiveRunsPanel(id="live_runs"),
                 id="row3_grid",
             ),
-            ActiveSessionsPanel(id="sessions"),
+            Grid(
+                LiveRunsPanel(id="live_runs"),
+                ActiveSessionsPanel(id="sessions"),
+                id="row4_grid",
+            ),
             Vertical(
                 GlowTitle("RECENT LAUNCHES", id="recent_title"),
                 RecentTable(id="recent"),
@@ -2678,6 +2770,7 @@ class AgentPulseApp(App):
 
     def on_mount(self) -> None:
         self.logo = self.query_one("#logo", NeonLogo)
+        self.stats = self.query_one("#stats", StatPanel)
         self.health_gauge = self.query_one("#health", HealthGauge)
         self.history = self.query_one("#history", HistoryPanel)
         self.mix = self.query_one("#mix", MixPanel)
@@ -2700,7 +2793,7 @@ class AgentPulseApp(App):
         if width is None:
             width = self.size.width
         narrow = width < 100
-        for grid_id in ("#row1_grid", "#row2_grid", "#row3_grid"):
+        for grid_id in ("#row1_grid", "#row2_grid", "#row3_grid", "#row4_grid"):
             try:
                 grid = self.query_one(grid_id, Grid)
                 if narrow:
@@ -2776,6 +2869,7 @@ class AgentPulseApp(App):
 
     def _tick(self) -> None:
         self.logo.tick += 1
+        self.stats.tick += 1
         self.health_gauge.tick += 1
 
     def _poll(self) -> None:
@@ -2807,6 +2901,7 @@ class AgentPulseApp(App):
 
         # Update all widgets
         self.logo.metrics = m
+        self.stats.metrics = m
         self.health_gauge.metrics = m
         self.history.metrics = m
         self.mix.metrics = m
