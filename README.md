@@ -50,7 +50,7 @@ Agent Pulse is a **real-time terminal dashboard** that monitors your GitHub Copi
 |---------|-------------|
 | 🖥️ **Live Session Tracking** | Real-time monitoring of active Copilot CLI terminal sessions |
 | ◉ **Live Runs Anywhere** | Unified inventory of active processes, tmux panes, Copilot event-stream agents, and Stampede/metaswarm runs |
-| 🐝 **Swarm Child Tracking** | Counts sub-agents inside each Stampede/metaswarm commander from `child-agents.jsonl`, split by division commanders, commanders, squad leads, workers, reviewers, and other |
+| 🐝 **Swarm Sub-agent Tracking** | Counts sub-agents inside each Stampede/metaswarm commander from `child-agents.jsonl`, split by division commanders, commanders, squad leads, sub-agents, reviewers, and other |
 | 🤖 **Agent Monitoring** | Track 15+ agent types: task, explore, general-purpose, rubber-duck, code-review, and custom agents |
 | 📊 **14-Day Trend Analysis** | Sparklines, daily breakdowns, gradient bar charts, and trend arrows |
 | 🔥 **24h Activity Heatmap** | Hourly session density visualization with `░▒▓█` blocks |
@@ -199,8 +199,8 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 ### Live Runs Anywhere
 - Unified live inventory of process-backed agents, tmux panes, in-flight Copilot event agents, and Stampede/metaswarm ledgers
 - Shows run/agent name, source, status, model, age, and nested child counts
-- Tracks sub-agents **within swarms** by scanning full `child-agents.jsonl` ledgers per commander, then rendering per-commander child totals plus recent child rows
-- Splits live swarm levels into division commanders, commanders, squad leads, workers, reviewers, and other so forced-count swarms can be checked from the dashboard
+- Tracks sub-agents **within swarms** by scanning full `child-agents.jsonl` ledgers per commander, then rendering per-commander sub-agent totals plus recent sub-agent rows
+- Splits live swarm levels into division commanders, commanders, squad leads, sub-agents, reviewers, and other so forced-count swarms can be checked from the dashboard
 - Set `AGENT_PULSE_SCAN_ROOTS=/path/one:/path/two` to include additional work roots for `.stampede` discovery
 
 ### Installed Agents

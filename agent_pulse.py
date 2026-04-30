@@ -940,10 +940,10 @@ class StampedeTelemetryCollector:
             if not isinstance(data, dict) or data.get("event") != "launch_started":
                 continue
 
-            child_id = str(data.get("child_id") or data.get("id") or "child")
-            role = str(data.get("role") or data.get("agent_type") or "child")
+            child_id = str(data.get("child_id") or data.get("agent_id") or data.get("id") or "sub-agent")
+            role = str(data.get("role") or data.get("agent_type") or "sub-agent")
             agent_type = agent_type_for_child_role(role, child_id)
-            ts = parse_iso_ts(data.get("ts")) or now_ts()
+            ts = parse_iso_ts(data.get("ts") or data.get("timestamp")) or now_ts()
             events.append(
                 AgentEvent(
                     ts=ts,
@@ -975,13 +975,13 @@ class StampedeTelemetryCollector:
                 continue
             if not isinstance(data, dict):
                 continue
-            child_id = data.get("child_id")
+            child_id = data.get("child_id") or data.get("agent_id") or data.get("id")
             if not child_id:
                 continue
             child_id = str(child_id)
             event = str(data.get("event") or "update")
             status = str(data.get("status") or event)
-            ts = parse_iso_ts(data.get("ts")) or now_ts()
+            ts = parse_iso_ts(data.get("ts") or data.get("timestamp")) or now_ts()
             previous = latest.get(child_id)
             role = data.get("role") or data.get("agent_type")
             if not role and previous:
@@ -992,7 +992,7 @@ class StampedeTelemetryCollector:
                 run_id=run_id,
                 commander_id=commander_id,
                 child_id=child_id,
-                role=str(role or "child"),
+                role=str(role or "sub-agent"),
                 event=event,
                 status=status,
                 model=model,
@@ -1107,7 +1107,7 @@ class StampedeTelemetryCollector:
         return runs
 
     def live_agents(self, metaswarm_runs: Optional[List[MetaswarmRun]] = None) -> List[LiveAgent]:
-        """Return visible Stampede commanders/workers and recent nested children."""
+        """Return visible Stampede commanders/sub-agents and recent nested sub-agents."""
         now = now_ts()
         live: List[LiveAgent] = []
         seen_stampede_agents: set[str] = set()
@@ -1197,12 +1197,12 @@ class StampedeTelemetryCollector:
                     live.append(
                         LiveAgent(
                             source="metaswarm",
-                            agent_id=f"{run.run_id}/{commander.commander_id}/children",
+                            agent_id=f"{run.run_id}/{commander.commander_id}/sub-agents",
                             agent_type="metaswarm-swarm",
                             name=(
-                                f"children {commander.child_agents_seen} "
+                                f"sub-agents {commander.child_agents_seen} "
                                 f"(div {commander.division_commanders_seen}, cmd {commander.commanders_seen}, "
-                                f"sq {commander.squad_leads_seen}, wkr {commander.workers_seen}, "
+                                f"sq {commander.squad_leads_seen}, sub {commander.workers_seen}, "
                                 f"rev {commander.reviewers_seen}, other {commander.other_children_seen}; "
                                 f"run {commander.child_agents_running}, stale {commander.child_agents_stale}, "
                                 f"done {commander.child_agents_completed}, fail {commander.child_agents_failed})"
@@ -2102,7 +2102,7 @@ class StatPanel(Static):
             bar(levels.get("squad_leads", 0)),
         )
         t.add_row(
-            Text("Workers         :", style="bold white"),
+            Text("Sub-agents      :", style="bold white"),
             Text(str(levels.get("workers", 0)), style="bold #7CFF6B"),
             bar(levels.get("workers", 0)),
         )
@@ -2234,6 +2234,7 @@ class MixPanel(Static):
         type_icons = {
             "explore": "⚡", "task": "⚙", "general-purpose": "●",
             "code-review": "🔍", "rubber-duck": "🦆",
+            "metaswarm-sub-agent": "◆", "metaswarm-worker": "◆",
         }
 
         table = Table.grid(padding=(0, 1))
@@ -2254,7 +2255,7 @@ class MixPanel(Static):
             icon = type_icons.get(k, "●")
             table.add_row(
                 Text(icon, style=color),
-                Text(k, style=f"bold {color}"),
+                Text(display_agent_type(k), style=f"bold {color}"),
                 Text(str(by_type[k]), style=f"bold {color}"),
                 Text(f"({pct:2d}%)", style="#8D99AE"),
                 bar(by_type[k]).stylize(color),
@@ -2370,7 +2371,7 @@ class ActiveSessionsPanel(Static):
             t.add_row(
                 Text(s.session_id, style="bold #00D1FF"),
                 Text(str(s.pid), style="#C7F9CC"),
-                Text(s.agent_type, style=f"bold {color}"),
+                Text(display_agent_type(s.agent_type), style=f"bold {color}"),
                 Text(s.status, style=f"bold {status_color}"),
                 Text(runtime, style="bold #00F5D4"),
             )
@@ -2389,7 +2390,7 @@ class LiveRunsPanel(Static):
             return Panel(
                 Text(
                     "No live agents/runs detected.\n"
-                    "Scanning: processes · tmux panes · Copilot events · .stampede runs · swarm child ledgers",
+                    "Scanning: processes · tmux panes · Copilot events · .stampede runs · swarm sub-agent ledgers",
                     style="#8D99AE",
                 ),
                 border_style="#00F5D4",
@@ -2410,7 +2411,7 @@ class LiveRunsPanel(Static):
             f"[#8D99AE]· div[/] [bold #B388FF]{division_commanders}[/]  "
             f"[#8D99AE]· cmd[/] [bold #00F5D4]{commanders}[/]  "
             f"[#8D99AE]· squads[/] [bold #FFD166]{levels.get('squad_leads', 0)}[/]  "
-            f"[#8D99AE]· workers[/] [bold #7CFF6B]{levels.get('workers', 0)}[/]  "
+            f"[#8D99AE]· sub-agents[/] [bold #7CFF6B]{levels.get('workers', 0)}[/]  "
             f"[#8D99AE]· rev[/] [bold #FF4D6D]{levels.get('reviewers', 0)}[/]"
         )
 
@@ -2425,7 +2426,7 @@ class LiveRunsPanel(Static):
         t.add_row(
             Text("SOURCE", style="bold #8D99AE"),
             Text("TYPE", style="bold #8D99AE"),
-            Text("RUN / AGENT / SWARM CHILDREN", style="bold #8D99AE"),
+            Text("RUN / AGENT / SWARM SUB-AGENTS", style="bold #8D99AE"),
             Text("STATUS", style="bold #8D99AE"),
             Text("MODEL", style="bold #8D99AE"),
             Text("AGE", style="bold #8D99AE"),
@@ -2451,7 +2452,7 @@ class LiveRunsPanel(Static):
 
             t.add_row(
                 Text(agent.source, style="#8D99AE"),
-                Text(agent.agent_type, style=f"bold {color}"),
+                Text(display_agent_type(agent.agent_type), style=f"bold {color}"),
                 Text(name, style="#C7F9CC"),
                 Text(agent.status, style=f"bold {status_color}"),
                 Text(shorten_model(agent.model) if agent.model else "—", style=model_color(agent.model) if agent.model else "#8D99AE"),
@@ -2462,14 +2463,14 @@ class LiveRunsPanel(Static):
             f"Levels now: {division_commanders} division commanders · "
             f"{commanders} commanders · "
             f"{levels.get('squad_leads', 0)} squad leads · "
-            f"{levels.get('workers', 0)} workers · "
+            f"{levels.get('workers', 0)} sub-agents · "
             f"{levels.get('reviewers', 0)} reviewers · "
             f"{levels.get('other', 0)} other.  "
             f"Metaswarm ledgers: {m.metaswarm_active_commanders} commanders · "
-            f"{m.metaswarm_children_seen} children seen · "
+            f"{m.metaswarm_children_seen} sub-agents seen · "
             f"{m.metaswarm_children_running} running · "
             f"{m.metaswarm_children_stale} stale · "
-            f"{m.metaswarm_children_last5m} child launches in 5m",
+            f"{m.metaswarm_children_last5m} sub-agent launches in 5m",
             style="#8D99AE",
         )
         return Panel(Group(t, "", foot), border_style="#00F5D4", title=title)
@@ -2481,15 +2482,16 @@ BUILTIN_AGENTS = {
     "general-purpose":  ("●", "Full-capability multi-step agent", "#B388FF"),
     "code-review":      ("🔍", "High-signal code review", "#FF4D6D"),
     "rubber-duck":      ("🦆", "Interactive debugging companion", "#FFD166"),
-    "dispatch-worker":  ("📡", "Parallel multi-terminal worker", "#00F5D4"),
-    "stampede-agent":   ("🐎", "Stampede orchestration worker", "#FF9F1C"),
+    "dispatch-worker":  ("📡", "Parallel multi-terminal sub-agent", "#00F5D4"),
+    "stampede-agent":   ("🐎", "Stampede orchestration sub-agent", "#FF9F1C"),
     "stampede-monitor": ("📊", "Stampede monitor pane", "#8D99AE"),
     "stampede-commander": ("🦬", "Metaswarm commander pane", "#FF9F1C"),
     "metaswarm-division": ("◈", "Metaswarm division commander", "#B388FF"),
     "metaswarm-commander": ("◇", "Metaswarm commander", "#FF9F1C"),
-    "metaswarm-swarm":  ("🐝", "Swarm child-agent summary", "#80FFDB"),
+    "metaswarm-swarm":  ("🐝", "Swarm sub-agent summary", "#80FFDB"),
     "metaswarm-squad":  ("⬢", "Metaswarm squad lead", "#FFD166"),
-    "metaswarm-worker": ("◆", "Metaswarm leaf worker", "#00F5D4"),
+    "metaswarm-sub-agent": ("◆", "Metaswarm leaf sub-agent", "#00F5D4"),
+    "metaswarm-worker": ("◆", "Metaswarm leaf sub-agent", "#00F5D4"),
     "metaswarm-reviewer": ("🔍", "Metaswarm reviewer", "#FF4D6D"),
     "swarm-command":    ("🐝", "Multi-model swarm orchestrator", "#80FFDB"),
 }
@@ -2871,6 +2873,10 @@ class AgentPulseApp(App):
                 "live_agents": [dataclasses.asdict(a) for a in m.live_agents],
                 "metaswarm": {
                     "active_commanders": m.metaswarm_active_commanders,
+                    "sub_agents_seen": m.metaswarm_children_seen,
+                    "sub_agents_running": m.metaswarm_children_running,
+                    "sub_agents_stale": m.metaswarm_children_stale,
+                    "sub_agents_last5m": m.metaswarm_children_last5m,
                     "children_seen": m.metaswarm_children_seen,
                     "children_running": m.metaswarm_children_running,
                     "children_stale": m.metaswarm_children_stale,
@@ -2932,7 +2938,7 @@ class AgentPulseApp(App):
         self.store.close()
 
 
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
@@ -3009,6 +3015,10 @@ def _mode_export() -> None:
         "live_agents": [dataclasses.asdict(a) for a in m.live_agents],
         "metaswarm": {
             "active_commanders": m.metaswarm_active_commanders,
+            "sub_agents_seen": m.metaswarm_children_seen,
+            "sub_agents_running": m.metaswarm_children_running,
+            "sub_agents_stale": m.metaswarm_children_stale,
+            "sub_agents_last5m": m.metaswarm_children_last5m,
             "children_seen": m.metaswarm_children_seen,
             "children_running": m.metaswarm_children_running,
             "children_stale": m.metaswarm_children_stale,
