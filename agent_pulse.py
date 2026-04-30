@@ -2743,26 +2743,26 @@ class AgentPulseApp(App):
                 HealthGauge(id="health"),
                 id="row1_grid",
             ),
-            Vertical(
-                GlowTitle("RECENT LAUNCHES", id="recent_title"),
-                RecentTable(id="recent"),
-                id="recent_box",
+            Grid(
+                Vertical(
+                    GlowTitle("RECENT LAUNCHES", id="recent_title"),
+                    RecentTable(id="recent"),
+                    id="recent_box",
+                ),
+                ModelDistPanel(id="model_dist"),
+                id="row2_grid",
             ),
             Grid(
                 HistoryPanel(self.store, id="history"),
                 SignalPanel(self.store, id="signal"),
-                id="row2_grid",
-            ),
-            Grid(
-                MixPanel(id="mix"),
-                ModelDistPanel(id="model_dist"),
                 id="row3_grid",
             ),
             Grid(
+                MixPanel(id="mix"),
                 LiveRunsPanel(id="live_runs"),
-                ActiveSessionsPanel(id="sessions"),
                 id="row4_grid",
             ),
+            ActiveSessionsPanel(id="sessions"),
             InstalledAgentsPanel(id="installed"),
             Footer(),
             id="root",

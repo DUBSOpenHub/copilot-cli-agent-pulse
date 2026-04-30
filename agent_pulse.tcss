@@ -25,9 +25,15 @@ Screen {
   margin: 0 2;
 }
 
-#stats, #history, #mix, #signal, #health, #model_dist, #live_runs, #sessions {
+#stats, #history, #mix, #signal, #health, #model_dist, #live_runs {
   height: 100%;
   min-width: 36;
+}
+
+#sessions {
+  height: auto;
+  min-width: 36;
+  margin: 0 2;
 }
 
 #installed {
@@ -37,12 +43,11 @@ Screen {
 }
 
 #recent_box {
-  margin: 0 2;
+  margin: 0;
   padding: 1 1;
   border: round #00F5D4;
   background: #0b0f14;
-  height: auto;
-  max-height: 50%;
+  height: 100%;
 }
 
 #recent_title {
