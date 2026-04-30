@@ -216,10 +216,6 @@ Use **`agentpulse --here`** (or the `agentpulse-here` alias) to run the dashboar
 - 24h breakdown of AI models used across agent launches
 - Per-model count, percentage, and gradient bar
 
-### Token Usage
-- 24h token consumption with estimated cost
-- Hourly token sparkline
-
 ---
 
 ## 📁 Project Structure

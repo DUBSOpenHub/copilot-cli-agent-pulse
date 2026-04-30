@@ -1648,7 +1648,6 @@ class PulseMetrics:
     model_dist_24h: Dict[str, int] = None
     # Feature 3: Token usage
     tokens_today: int = 0
-    cost_estimate_today: float = 0.0
     # Feature 4: Fleet health score
     health_score: int = 100
     # Real-time sub-agent tracking
@@ -1928,10 +1927,9 @@ class MetricsEngine:
         # Feature 2: Model distribution
         model_dist_24h = self.store.model_distribution_since(ts - 24 * 3600)
 
-        # Feature 3: Token usage + cost estimation
+        # Feature 3: Token usage
         input_tok, output_tok = self.store.token_totals_since(ts - 24 * 3600)
         tokens_today = input_tok + output_tok
-        cost_estimate_today = round((input_tok * 3.0 / 1_000_000) + (output_tok * 15.0 / 1_000_000), 4)
 
         # Feature 4: Health score
         health_score = 100
@@ -1967,7 +1965,6 @@ class MetricsEngine:
             error_count_24h=error_count_24h,
             model_dist_24h=model_dist_24h,
             tokens_today=tokens_today,
-            cost_estimate_today=cost_estimate_today,
             health_score=health_score,
             running_subagents=running_subagents,
             subagents_last5m=subagents_last5m,
@@ -2012,15 +2009,17 @@ class NeonLogo(Static):
         m = self.metrics
         heart = _HEARTBEATS[self.tick % len(_HEARTBEATS)]
         if m:
-            agents = m.running_subagents
             sessions = m.active_sessions
             monitor_line = Text.assemble(
                 (f"  {heart}  ", ""),
-                ("monitoring ", "#8D99AE"),
-                (str(agents), "bold #7CFF6B"),
-                (" live runs across ", "#8D99AE"),
+                ("total agents ", "#8D99AE"),
+                (str(m.spawned_all_time), "bold #FFD166"),
+                (" · live agents ", "#8D99AE"),
+                (str(m.total_live_agents), "bold #00F5D4"),
+                (" · live sub-agents ", "#8D99AE"),
+                (str(m.running_subagents), "bold #7CFF6B"),
+                (" · sessions ", "#8D99AE"),
                 (str(sessions), "bold #00D1FF"),
-                (" active sessions", "#8D99AE"),
             )
         else:
             monitor_line = Text(f"  {heart}  Initializing…", style="#8D99AE")
@@ -2655,53 +2654,6 @@ class ModelDistPanel(Static):
         return Panel(table, border_style="#B388FF", title="[bold #B388FF]🧠 MODEL DISTRIBUTION[/]")
 
 
-# Feature 3: Token Usage Widget
-class TokenUsagePanel(Static):
-    metrics: Optional[PulseMetrics] = reactive(None)
-
-    def __init__(self, store: PulseStore, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.store = store
-
-    def render(self) -> Panel:
-        m = self.metrics
-        if not m:
-            return Panel("…", border_style="#FFD166", title="[bold #FFD166]🪙 TOKEN USAGE[/]")
-
-        def fmt_tokens(n: int) -> str:
-            if n >= 1_000_000:
-                return f"{n / 1_000_000:.1f}M"
-            if n >= 1_000:
-                return f"{n / 1_000:.1f}K"
-            return str(n)
-
-        t = Table.grid(padding=(0, 2))
-        t.add_column(justify="left")
-        t.add_column(justify="right")
-
-        t.add_row(
-            Text("Tokens (24h):", style="bold white"),
-            Text(fmt_tokens(m.tokens_today), style="bold #00D1FF"),
-        )
-        t.add_row(
-            Text("Est. Cost:", style="bold white"),
-            Text(f"${m.cost_estimate_today:.4f}", style="bold #7CFF6B" if m.cost_estimate_today < 1.0 else "bold #FFD166"),
-        )
-
-        # Mini sparkline of hourly token usage
-        hourly = self.store.token_hourly_24h()
-        spark = Text("24h: ", style="#8D99AE")
-        spark.append(sparkline(hourly, width=20), style="#00D1FF")
-
-        cost_note = Text("(est: $3/M in, $15/M out)", style="#555")
-
-        return Panel(
-            Group(t, "", spark, cost_note),
-            border_style="#FFD166",
-            title="[bold #FFD166]🪙 TOKEN USAGE[/]",
-        )
-
-
 class GlowTitle(Static):
     """Small title strip used above bordered boxes."""
 
@@ -2775,16 +2727,12 @@ class AgentPulseApp(App):
                 ActiveSessionsPanel(id="sessions"),
                 id="row4_grid",
             ),
-            Grid(
-                InstalledAgentsPanel(id="installed"),
-                TokenUsagePanel(self.store, id="tokens"),
-                id="row5_grid",
-            ),
             Vertical(
                 GlowTitle("RECENT LAUNCHES", id="recent_title"),
                 RecentTable(id="recent"),
                 id="recent_box",
             ),
+            InstalledAgentsPanel(id="installed"),
             Footer(),
             id="root",
         )
@@ -2798,7 +2746,6 @@ class AgentPulseApp(App):
         self.model_dist = self.query_one("#model_dist", ModelDistPanel)
         self.live_runs = self.query_one("#live_runs", LiveRunsPanel)
         self.sessions_panel = self.query_one("#sessions", ActiveSessionsPanel)
-        self.tokens = self.query_one("#tokens", TokenUsagePanel)
         self.recent_title = self.query_one("#recent_title", GlowTitle)
         self.recent = self.query_one("#recent", RecentTable)
 
@@ -2815,7 +2762,7 @@ class AgentPulseApp(App):
         if width is None:
             width = self.size.width
         narrow = width < 100
-        for grid_id in ("#row1_grid", "#row2_grid", "#row3_grid", "#row4_grid", "#row5_grid"):
+        for grid_id in ("#row1_grid", "#row2_grid", "#row3_grid", "#row4_grid"):
             try:
                 grid = self.query_one(grid_id, Grid)
                 if narrow:
@@ -2868,7 +2815,6 @@ class AgentPulseApp(App):
                 "error_count_24h": m.error_count_24h,
                 "health_score": m.health_score,
                 "tokens_today": m.tokens_today,
-                "cost_estimate_today": m.cost_estimate_today,
                 "model_dist_24h": m.model_dist_24h,
                 "live_agents": [dataclasses.asdict(a) for a in m.live_agents],
                 "metaswarm": {
@@ -2931,7 +2877,6 @@ class AgentPulseApp(App):
         self.model_dist.metrics = m
         self.live_runs.metrics = m
         self.sessions_panel.metrics = m
-        self.tokens.metrics = m
         self.recent.update_rows(m.recent_events)
 
     def on_shutdown(self) -> None:
@@ -3010,7 +2955,6 @@ def _mode_export() -> None:
         "error_count_24h": m.error_count_24h,
         "health_score": m.health_score,
         "tokens_today": m.tokens_today,
-        "cost_estimate_today": m.cost_estimate_today,
         "model_dist_24h": m.model_dist_24h,
         "live_agents": [dataclasses.asdict(a) for a in m.live_agents],
         "metaswarm": {
