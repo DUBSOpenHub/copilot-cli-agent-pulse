@@ -332,6 +332,9 @@ class MetaswarmCommander:
     pid_status: str
     squad_leads_launched: int
     squad_leads_target: int
+    squad_leads_running: int
+    squad_leads_completed: int
+    squad_leads_failed: int
     workers_launched: int
     workers_target: int
     workers_running: int
@@ -1188,6 +1191,9 @@ class StampedeTelemetryCollector:
                         pid_status=pid_status,
                         squad_leads_launched=int(telemetry.get("squad_leads_launched") or 0),
                         squad_leads_target=int(telemetry.get("squad_leads_target") or 0),
+                        squad_leads_running=int(telemetry.get("squad_leads_running") or 0),
+                        squad_leads_completed=int(telemetry.get("squad_leads_completed") or 0),
+                        squad_leads_failed=int(telemetry.get("squad_leads_failed") or 0),
                         workers_launched=int(telemetry.get("workers_launched") or 0),
                         workers_target=int(telemetry.get("workers_target") or 0),
                         workers_running=int(telemetry.get("workers_running") or 0),
@@ -2053,8 +2059,25 @@ class MetricsEngine:
                 return False
             return c.status in {"running", "starting"} and (c.heartbeat_age_s is None or c.heartbeat_age_s < 90)
 
+        def commander_running_workers(c: MetaswarmCommander) -> int:
+            # Prefer commander telemetry for "running now"; ledgers can retain
+            # launch_started rows after a worker has completed and inflate live counts.
+            if c.workers_launched or c.workers_completed or c.workers_failed or c.workers_target:
+                return max(0, c.workers_running)
+            return max(0, c.child_agents_running)
+
+        def commander_running_squad_leads(c: MetaswarmCommander) -> int:
+            if (
+                c.squad_leads_launched
+                or c.squad_leads_completed
+                or c.squad_leads_failed
+                or c.squad_leads_target
+            ):
+                return max(0, c.squad_leads_running)
+            return 0
+
         metaswarm_children_running = sum(
-            c.child_agents_running or c.workers_running
+            commander_running_workers(c)
             for run in metaswarm_runs
             for c in run.commanders
             if commander_is_active(c)
@@ -2099,7 +2122,10 @@ class MetricsEngine:
                     agent_id=f"event:{ev_type}:{ev_name or ev_ts}:{ev_ts}",
                     agent_type=ev_type,
                     name=ev_name or ev_type,
-                    status="IN-FLIGHT",
+                    # Event streams prove a launch happened recently, not that
+                    # the agent is still alive. Keep them visible as recent
+                    # activity but out of authoritative live counts.
+                    status="RECENT",
                     age_s=max(0, ts - ev_ts),
                     model=ev_model,
                 )
@@ -2138,12 +2164,20 @@ class MetricsEngine:
                 if not commander_is_active(commander):
                     continue
                 metaswarm_level_counts["commanders"] += 1
-                metaswarm_level_counts["squad_leads"] += commander.squad_leads_seen
-                metaswarm_level_counts["workers"] += max(commander.workers_seen, commander.workers_running)
+                metaswarm_level_counts["squad_leads"] += commander_running_squad_leads(commander)
+                metaswarm_level_counts["workers"] += commander_running_workers(commander)
                 metaswarm_level_counts["reviewers"] += commander.reviewers_seen
                 metaswarm_level_counts["other"] += commander.other_children_seen
-        for level, count in metaswarm_level_counts.items():
-            live_level_counts[level] = max(live_level_counts.get(level, 0), count)
+        if metaswarm_runs:
+            # For Stampede/Agent Conductor runs, commander telemetry is the
+            # authoritative source for live swarm levels. Process/event scans are
+            # useful hints, but stale tmux panes and recent launch logs can
+            # over-count completed commanders and sub-agents.
+            for level in ("division_commanders", "commanders", "squad_leads", "workers", "reviewers"):
+                live_level_counts[level] = metaswarm_level_counts.get(level, 0)
+        else:
+            for level, count in metaswarm_level_counts.items():
+                live_level_counts[level] = max(live_level_counts.get(level, 0), count)
         total_live_agents = sum(live_level_counts.values())
         live_agents = all_live_agents[:80]
         live_running_count = sum(
@@ -2155,7 +2189,11 @@ class MetricsEngine:
         # Use the same leaf sub-agent aggregate rendered in the detailed level
         # rows, so the top "live sub-agents" line never drifts from the dashboard
         # breakdown by accidentally including commanders, squads, or reviewers.
-        running_subagents = live_level_counts.get("workers", 0)
+        running_subagents = (
+            metaswarm_children_running
+            if metaswarm_runs
+            else live_level_counts.get("workers", 0)
+        )
         subagents_last5m = agent_events_last5m
         launch_level_counts_5m = self.store.agent_events_by_level_since(ts - 5 * 60)
 
@@ -3198,7 +3236,7 @@ class AgentPulseApp(App):
         self.store.close()
 
 
-VERSION = "2.4.8"
+VERSION = "2.4.9"
 
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
