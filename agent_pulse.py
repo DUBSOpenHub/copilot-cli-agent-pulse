@@ -1920,14 +1920,10 @@ class MetricsEngine:
             if a.status in {"RUN", "IN-FLIGHT"} and a.agent_type != "stampede-monitor"
         )
 
-        # Combine filesystem, process, and event signals; take max so we never under-count.
-        running_subagents = max(
-            running_subagents_from_events,
-            running_agents_est,
-            metaswarm_children_running,
-            live_running_count,
-            total_live_agents,
-        )
+        # Use the same leaf sub-agent aggregate rendered in the detailed level
+        # rows, so the top "live sub-agents" line never drifts from the dashboard
+        # breakdown by accidentally including commanders, squads, or reviewers.
+        running_subagents = live_level_counts.get("workers", 0)
         subagents_last5m = agent_events_last5m
         launch_level_counts_5m = self.store.agent_events_by_level_since(ts - 5 * 60)
 
@@ -2439,12 +2435,8 @@ class LiveRunsPanel(Static):
                 title="[bold #00F5D4]◉ LIVE RUNS + SWARM SUB-AGENTS[/]",
             )
 
-        running = sum(
-            1
-            for a in m.live_agents
-            if a.status in {"RUN", "IN-FLIGHT"} and a.agent_type != "stampede-monitor"
-        )
         levels = m.live_level_counts or empty_level_counts()
+        running = m.total_live_agents
         division_commanders = levels.get("division_commanders", 0)
         commanders = levels.get("commanders", 0)
         title = (
@@ -2844,6 +2836,8 @@ class AgentPulseApp(App):
                 "exported_at": datetime.now(timezone.utc).isoformat(),
                 "active_sessions": m.active_sessions,
                 "running_agents_est": m.running_agents_est,
+                "running_subagents": m.running_subagents,
+                "subagents_last5m": m.subagents_last5m,
                 "total_live_agents": m.total_live_agents,
                 "live_level_counts": m.live_level_counts,
                 "launch_level_counts_5m": m.launch_level_counts_5m,
@@ -2926,7 +2920,7 @@ class AgentPulseApp(App):
         self.store.close()
 
 
-VERSION = "2.4.3"
+VERSION = "2.4.4"
 
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
@@ -2984,6 +2978,8 @@ def _mode_export() -> None:
         "version": VERSION,
         "active_sessions": m.active_sessions,
         "running_agents_est": m.running_agents_est,
+        "running_subagents": m.running_subagents,
+        "subagents_last5m": m.subagents_last5m,
         "total_live_agents": m.total_live_agents,
         "live_level_counts": m.live_level_counts,
         "launch_level_counts_5m": m.launch_level_counts_5m,
