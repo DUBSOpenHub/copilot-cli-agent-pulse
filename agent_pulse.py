@@ -359,6 +359,7 @@ class MetaswarmRun:
     repo_path: str
     profile: str
     commanders: List[MetaswarmCommander] = field(default_factory=list)
+    commentary: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1095,6 +1096,13 @@ class StampedeTelemetryCollector:
             run_id = str(state.get("run_id") or run_dir.name)
             profile = str(state.get("profile") or "metaswarm")
             repo_path = str(state.get("repo_path") or run_dir.parent.parent)
+            commentary_data = self._read_json(run_dir / "orchestrator-commentary.json")
+            commentary_lines = commentary_data.get("lines") if isinstance(commentary_data, dict) else []
+            commentary = [
+                str(line)
+                for line in commentary_lines
+                if isinstance(line, str) and line.strip()
+            ][:5] if isinstance(commentary_lines, list) else []
             commanders: List[MetaswarmCommander] = []
 
             for commander_dir in sorted((run_dir / "commanders").glob("commander-*")):
@@ -1181,7 +1189,15 @@ class StampedeTelemetryCollector:
                 )
 
             if commanders:
-                runs.append(MetaswarmRun(run_id=run_id, repo_path=repo_path, profile=profile, commanders=commanders))
+                runs.append(
+                    MetaswarmRun(
+                        run_id=run_id,
+                        repo_path=repo_path,
+                        profile=profile,
+                        commanders=commanders,
+                        commentary=commentary,
+                    )
+                )
 
         return runs
 
@@ -2606,6 +2622,18 @@ class LiveRunsPanel(Static):
                 Text(human_age(agent.age_s), style="#8D99AE"),
             )
 
+        commentary_lines: List[str] = []
+        for run in m.metaswarm_runs:
+            if run.commentary:
+                commentary_lines = [f"{run.run_id}: {run.commentary[0]}", *run.commentary[1:4]]
+                break
+
+        commentary_text = Text()
+        if commentary_lines:
+            commentary_text.append("🧭 Orchestrator stats + insights\n", style="bold #FFD166")
+            for line in commentary_lines:
+                commentary_text.append(f"↳ {line}\n", style="#C7F9CC")
+
         foot = Text(
             f"Levels now: {division_commanders} division commanders · "
             f"{commanders} commanders · "
@@ -2620,6 +2648,8 @@ class LiveRunsPanel(Static):
             f"{m.metaswarm_children_last5m} sub-agent launches in 5m",
             style="#8D99AE",
         )
+        if commentary_lines:
+            return Panel(Group(t, "", commentary_text, foot), border_style="#00F5D4", title=title)
         return Panel(Group(t, "", foot), border_style="#00F5D4", title=title)
 
 
@@ -3046,7 +3076,7 @@ class AgentPulseApp(App):
         self.store.close()
 
 
-VERSION = "2.4.6"
+VERSION = "2.4.7"
 
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
