@@ -117,6 +117,8 @@ LEVEL_KEYS = (
     "reviewers",
     "other",
 )
+TERMINAL_COMMANDER_STATUSES = {"success", "partial", "complete", "completed", "done", "failed", "error", "blocked"}
+TERMINAL_SUCCESS_COMMANDER_STATUSES = {"success", "partial", "complete", "completed", "done"}
 
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
 _WAVE_CHARS = "▁▂▃▄▅▆▇█▇▆▅▄▃▂▁"
@@ -838,6 +840,75 @@ class StampedeTelemetryCollector:
         except (OSError, TypeError, ValueError):
             return False
 
+    def _tmux_commander_pid(self, run_id: str, commander_id: str) -> Optional[int]:
+        """Find the live Copilot process for a commander pane when PID files are stale."""
+        match = re.search(r"(\d+)$", commander_id)
+        if not match:
+            return None
+        commander_index = int(match.group(1))
+        session = f"stampede-{run_id}"
+        try:
+            pane_rows = subprocess.check_output(
+                ["tmux", "list-panes", "-t", session, "-F", "#{pane_index}\t#{pane_pid}\t#{pane_title}"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).splitlines()
+        except Exception:
+            return None
+
+        pane_pid: Optional[int] = None
+        for row in pane_rows:
+            parts = row.split("\t", 2)
+            if len(parts) < 2:
+                continue
+            pane_index, pid_text = parts[0], parts[1]
+            title = parts[2] if len(parts) > 2 else ""
+            if pane_index == str(commander_index) or f"Commander #{commander_index}" in title:
+                try:
+                    pane_pid = int(pid_text)
+                except ValueError:
+                    pane_pid = None
+                break
+        if pane_pid is None or not self._pid_alive(pane_pid):
+            return None
+
+        try:
+            ps_rows = subprocess.check_output(
+                ["ps", "-axo", "pid,ppid,command"],
+                text=True,
+                errors="replace",
+                stderr=subprocess.DEVNULL,
+            ).splitlines()[1:]
+        except Exception:
+            return pane_pid
+
+        children: Dict[int, List[int]] = {}
+        commands: Dict[int, str] = {}
+        for row in ps_rows:
+            parts = row.strip().split(None, 2)
+            if len(parts) < 3:
+                continue
+            try:
+                pid = int(parts[0])
+                ppid = int(parts[1])
+            except ValueError:
+                continue
+            children.setdefault(ppid, []).append(pid)
+            commands[pid] = parts[2]
+
+        stack = list(children.get(pane_pid, []))
+        fallback = pane_pid
+        while stack:
+            pid = stack.pop(0)
+            if not self._pid_alive(pid):
+                continue
+            cmd = commands.get(pid, "")
+            if "copilot" in cmd and "stampede-commander" in cmd:
+                return pid
+            fallback = pid
+            stack.extend(children.get(pid, []))
+        return fallback
+
     def _iter_stampede_bases(self) -> List[Path]:
         """Scan common roots plus an opt-in root list without walking home deeply every tick."""
         if self._bases_cache and time.time() - self._last_base_scan < 10:
@@ -1051,14 +1122,22 @@ class StampedeTelemetryCollector:
                         pid_status = "run" if self._pid_alive(pid_file.read_text().strip()) else "dead"
                     except Exception:
                         pid_status = "unknown"
+                if pid_status != "run":
+                    tmux_pid = self._tmux_commander_pid(run_id, commander_id)
+                    if tmux_pid is not None and self._pid_alive(tmux_pid):
+                        pid_status = "run"
 
                 hb_ts = parse_iso_ts(commander_state.get("last_heartbeat_at") or commander_state.get("updated_at"))
                 heartbeat_age = max(0, now - hb_ts) if hb_ts else None
+                status_text = str(commander_state.get("status") or "").lower()
                 commander_active = (
-                    pid_status == "run"
+                    status_text not in TERMINAL_COMMANDER_STATUSES
+                    and pid_status == "run"
                     or (
+                        status_text not in TERMINAL_COMMANDER_STATUSES
+                        and
                         pid_status == "unknown"
-                        and str(commander_state.get("status") or "") in {"running", "starting"}
+                        and status_text in {"running", "starting"}
                         and (heartbeat_age is None or heartbeat_age < 90)
                     )
                 )
@@ -1134,6 +1213,11 @@ class StampedeTelemetryCollector:
                     if not isinstance(meta, dict):
                         meta = {}
                     role = str(meta.get("role") or ("commander" if agent_id.startswith("commander-") else "worker"))
+                    if not alive and role == "commander":
+                        tmux_pid = self._tmux_commander_pid(run_id, agent_id)
+                        if tmux_pid is not None and self._pid_alive(tmux_pid):
+                            pid = tmux_pid
+                            alive = True
                     if role == "commander":
                         agent_type = "stampede-commander"
                     elif role == "worker":
@@ -1161,11 +1245,15 @@ class StampedeTelemetryCollector:
         for run in metaswarm_runs:
             for commander in run.commanders:
                 commander_agent_id = f"{run.run_id}/{commander.commander_id}"
+                commander_status_text = (commander.status or "").lower()
                 commander_active = (
-                    commander.pid_status == "run"
+                    commander_status_text not in TERMINAL_COMMANDER_STATUSES
+                    and commander.pid_status == "run"
                     or (
+                        commander_status_text not in TERMINAL_COMMANDER_STATUSES
+                        and
                         commander.pid_status == "unknown"
-                        and commander.status in {"running", "starting"}
+                        and commander_status_text in {"running", "starting"}
                         and (commander.heartbeat_age_s is None or commander.heartbeat_age_s < 90)
                     )
                 )
@@ -1663,6 +1751,7 @@ class PulseMetrics:
     metaswarm_children_seen: int = 0
     metaswarm_children_stale: int = 0
     live_agents: List[LiveAgent] = None
+    commander_alerts: List[Dict[str, str]] = None
 
     def __post_init__(self):
         if self.active_session_list is None:
@@ -1677,6 +1766,8 @@ class PulseMetrics:
             self.metaswarm_runs = []
         if self.live_agents is None:
             self.live_agents = []
+        if self.commander_alerts is None:
+            self.commander_alerts = []
 
 
 class MetricsEngine:
@@ -1816,6 +1907,9 @@ class MetricsEngine:
         # remain the preferred sources for long-lived runs.
         running_subagents_from_events = self.store.running_subagents_since(ts - LIVE_EVENT_WINDOW_S)
         def commander_is_active(c: MetaswarmCommander) -> bool:
+            status = (c.status or "").lower()
+            if status in TERMINAL_COMMANDER_STATUSES:
+                return False
             if c.pid_status == "run":
                 return True
             if c.pid_status == "dead":
@@ -1951,6 +2045,24 @@ class MetricsEngine:
         health_score -= min(30, errors_1h * 6)
         health_score = int(clamp(health_score, 0, 100))
 
+        commander_alerts: List[Dict[str, str]] = []
+        for run in metaswarm_runs:
+            for commander in run.commanders:
+                status = (commander.status or "unknown").lower()
+                if commander.pid_status == "dead" and status not in TERMINAL_SUCCESS_COMMANDER_STATUSES:
+                    commander_alerts.append(
+                        {
+                            "run_id": run.run_id,
+                            "commander_id": commander.commander_id,
+                            "status": commander.status,
+                            "phase": commander.phase,
+                            "message": (
+                                f"{commander.commander_id} died before completing "
+                                f"({commander.phase}/{commander.status})"
+                            ),
+                        }
+                    )
+
         return PulseMetrics(
             active_sessions=active_sessions,
             sessions_by_tty=sessions_by_tty,
@@ -1986,6 +2098,7 @@ class MetricsEngine:
             metaswarm_children_seen=metaswarm_children_seen,
             metaswarm_children_stale=metaswarm_children_stale,
             live_agents=live_agents,
+            commander_alerts=commander_alerts,
         )
 
 
@@ -2732,12 +2845,14 @@ class AgentPulseApp(App):
     _prev_spawned: int = 0
     _prev_error_rate_high: bool = False
     _alerted_milestones: set = None
+    _alerted_commanders: set = None
 
     def __init__(self) -> None:
         super().__init__()
         self.store = PulseStore()
         self.engine = MetricsEngine(self.store)
         self._alerted_milestones = set()
+        self._alerted_commanders = set()
 
     def compose(self) -> ComposeResult:
         yield Vertical(
@@ -2854,6 +2969,7 @@ class AgentPulseApp(App):
                 "tokens_today": m.tokens_today,
                 "model_dist_24h": m.model_dist_24h,
                 "live_agents": [dataclasses.asdict(a) for a in m.live_agents],
+                "commander_alerts": m.commander_alerts,
                 "metaswarm": {
                     "active_commanders": m.metaswarm_active_commanders,
                     "sub_agents_seen": m.metaswarm_children_seen,
@@ -2896,6 +3012,16 @@ class AgentPulseApp(App):
             self.notify("🔴 Error rate elevated", severity="error", timeout=6)
         self._prev_error_rate_high = error_high
 
+        # Alert when a commander process dies before completing its bundle. The
+        # metrics layer already checks tmux/process-tree fallbacks first, so this
+        # should be a real death signal rather than a stale PID file.
+        for alert in m.commander_alerts:
+            key = f"{alert.get('run_id')}/{alert.get('commander_id')}"
+            if key in self._alerted_commanders:
+                continue
+            self._alerted_commanders.add(key)
+            self.notify(f"🛑 {alert.get('message', 'Commander died before completing')}", severity="error", timeout=10)
+
         # Feature 5: Milestones
         for milestone in (10, 50, 100, 500, 1000):
             if m.spawned_all_time >= milestone and milestone not in self._alerted_milestones:
@@ -2920,7 +3046,7 @@ class AgentPulseApp(App):
         self.store.close()
 
 
-VERSION = "2.4.4"
+VERSION = "2.4.6"
 
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
@@ -2996,6 +3122,7 @@ def _mode_export() -> None:
         "tokens_today": m.tokens_today,
         "model_dist_24h": m.model_dist_24h,
         "live_agents": [dataclasses.asdict(a) for a in m.live_agents],
+        "commander_alerts": m.commander_alerts,
         "metaswarm": {
             "active_commanders": m.metaswarm_active_commanders,
             "sub_agents_seen": m.metaswarm_children_seen,
