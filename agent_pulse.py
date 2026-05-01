@@ -493,9 +493,24 @@ class ProcessCollector:
 
     @staticmethod
     def is_copilot_process(cmd: str) -> bool:
-        if "agent_pulse.py" in cmd:
+        lower = cmd.lower()
+        if "agent_pulse.py" in lower:
             return False
-        return bool(_COPILOT_CMD_RE.search(cmd))
+        if "microsoft teams" in lower:
+            return False
+        if "node_modules/@github/copilot" in lower:
+            return False
+        if "fswatch" in lower and ".copilot" in lower:
+            return False
+        parts = cmd.strip().split()
+        if not parts:
+            return False
+        executable = Path(parts[0]).name.lower()
+        if executable in {"copilot", "copilot-cli"}:
+            return True
+        if executable == "gh" and len(parts) > 1 and parts[1].lower() == "copilot":
+            return True
+        return "copilot-cli" in executable
 
     @staticmethod
     def is_agentish_process(cmd: str) -> bool:
@@ -1108,6 +1123,14 @@ class StampedeTelemetryCollector:
             for commander_dir in sorted((run_dir / "commanders").glob("commander-*")):
                 commander_id = commander_dir.name
                 commander_state = self._read_json(commander_dir / "swarm-state.json")
+                result_state = self._read_json(run_dir / "results" / f"{commander_id}.json")
+                state_status_text = str(commander_state.get("status") or "").lower()
+                result_status_text = str(result_state.get("status") or "").lower()
+                status_text = (
+                    result_status_text
+                    if result_status_text in TERMINAL_COMMANDER_STATUSES
+                    else state_status_text
+                )
                 telemetry = commander_state.get("telemetry", {})
                 if not isinstance(telemetry, dict):
                     telemetry = {}
@@ -1137,7 +1160,6 @@ class StampedeTelemetryCollector:
 
                 hb_ts = parse_iso_ts(commander_state.get("last_heartbeat_at") or commander_state.get("updated_at"))
                 heartbeat_age = max(0, now - hb_ts) if hb_ts else None
-                status_text = str(commander_state.get("status") or "").lower()
                 commander_active = (
                     status_text not in TERMINAL_COMMANDER_STATUSES
                     and pid_status == "run"
@@ -1161,7 +1183,7 @@ class StampedeTelemetryCollector:
                             if isinstance(fleet_meta.get("model"), str)
                             else None
                         ),
-                        status=str(commander_state.get("status") or "unknown"),
+                        status=status_text or "unknown",
                         phase=str(commander_state.get("phase") or "unknown"),
                         pid_status=pid_status,
                         squad_leads_launched=int(telemetry.get("squad_leads_launched") or 0),
@@ -1816,15 +1838,114 @@ class MetricsEngine:
             return match.group(1)
         return None
 
+    @staticmethod
+    def _terminal_commander_status(status: str) -> str:
+        normalized = (status or "").lower()
+        if normalized == "blocked":
+            return "BLOCKED"
+        if normalized in {"failed", "error"}:
+            return "FAILED"
+        if normalized == "partial":
+            return "PARTIAL"
+        if normalized in TERMINAL_SUCCESS_COMMANDER_STATUSES:
+            return "DONE"
+        return "STALE"
+
+    @staticmethod
+    def _stampede_commander_key(agent: LiveAgent) -> Optional[Tuple[str, str]]:
+        if agent.agent_type != "stampede-commander":
+            return None
+
+        if agent.source in {"stampede", "metaswarm"}:
+            match = re.match(r"(run-\d{8}-\d{6})/(commander-\d{3})", agent.agent_id)
+            if match:
+                return match.group(1), match.group(2)
+
+        if agent.source == "tmux" and agent.parent and agent.parent.startswith("stampede-"):
+            pane_match = re.search(r"\.(\d+)$", agent.agent_id)
+            if not pane_match:
+                return None
+            pane_index = int(pane_match.group(1))
+            if pane_index <= 0:
+                return None
+            return agent.parent.removeprefix("stampede-"), f"commander-{pane_index:03d}"
+
+        return None
+
+    def _normalize_terminal_stampede_commanders(
+        self,
+        live_agents: List[LiveAgent],
+        metaswarm_runs: List[MetaswarmRun],
+        procs: List[Proc],
+    ) -> List[LiveAgent]:
+        terminal_statuses: Dict[Tuple[str, str], str] = {}
+        for run in metaswarm_runs:
+            for commander in run.commanders:
+                status = (commander.status or "").lower()
+                if status in TERMINAL_COMMANDER_STATUSES:
+                    terminal_statuses[(run.run_id, commander.commander_id)] = self._terminal_commander_status(status)
+
+        by_pid = {p.pid: p for p in procs}
+        children: Dict[int, List[int]] = {}
+        for p in procs:
+            children.setdefault(p.ppid, []).append(p.pid)
+
+        def is_parked_commander_pane(agent: LiveAgent) -> bool:
+            if agent.source != "tmux" or agent.agent_type != "stampede-commander" or agent.pid is None:
+                return False
+            stack = [agent.pid]
+            saw_sleep = False
+            while stack:
+                pid = stack.pop(0)
+                proc = by_pid.get(pid)
+                if proc:
+                    cmd = proc.cmd
+                    if ProcessCollector.is_copilot_process(cmd) and "stampede-commander" in cmd:
+                        return False
+                    if re.search(r"\bsleep\s+(?:86400|infinity)\b", cmd):
+                        saw_sleep = True
+                stack.extend(children.get(pid, []))
+            return saw_sleep
+
+        if not terminal_statuses:
+            terminal_statuses = {}
+
+        normalized: List[LiveAgent] = []
+        for agent in live_agents:
+            key = self._stampede_commander_key(agent)
+            if key and key in terminal_statuses:
+                normalized.append(dataclasses.replace(agent, status=terminal_statuses[key]))
+            elif is_parked_commander_pane(agent):
+                normalized.append(dataclasses.replace(agent, status="STALE"))
+            else:
+                normalized.append(agent)
+        return normalized
+
     def _live_from_processes(self, procs: List[Proc], ts: int) -> List[LiveAgent]:
         live: List[LiveAgent] = []
         current_pids = {p.pid for p in procs}
+        children: Dict[int, List[int]] = {}
+        for p in procs:
+            children.setdefault(p.ppid, []).append(p.pid)
+        copilot_pids = {p.pid for p in procs if self.procs.is_copilot_process(p.cmd)}
+
+        def has_copilot_descendant(pid: int) -> bool:
+            stack = list(children.get(pid, []))
+            while stack:
+                child_pid = stack.pop(0)
+                if child_pid in copilot_pids:
+                    return True
+                stack.extend(children.get(child_pid, []))
+            return False
+
         for old_pid in list(self._process_start_times):
             if old_pid not in current_pids:
                 self._process_start_times.pop(old_pid, None)
 
         for p in procs:
             if not (self.procs.is_copilot_process(p.cmd) or self.procs.is_agentish_process(p.cmd)):
+                continue
+            if p.pid in copilot_pids and has_copilot_descendant(p.pid):
                 continue
             if p.pid not in self._process_start_times:
                 self._process_start_times[p.pid] = time.time()
@@ -1965,6 +2086,7 @@ class MetricsEngine:
         live_agents.extend(self._live_from_processes(procs, ts))
         live_agents.extend(self.tmux.collect())
         live_agents.extend(self.stampede.live_agents(metaswarm_runs))
+        live_agents = self._normalize_terminal_stampede_commanders(live_agents, metaswarm_runs, procs)
         for ev_ts, ev_type, ev_name, ev_model in self.store.running_agent_events_since(
             ts - LIVE_EVENT_WINDOW_S,
             limit=500,
@@ -3076,7 +3198,7 @@ class AgentPulseApp(App):
         self.store.close()
 
 
-VERSION = "2.4.7"
+VERSION = "2.4.8"
 
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
