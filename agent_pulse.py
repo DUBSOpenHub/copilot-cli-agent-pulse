@@ -1900,6 +1900,18 @@ class MetricsEngine:
             key=live_rank,
         )
         live_level_counts = count_agent_levels(all_live_agents, running_only=True)
+        metaswarm_level_counts = empty_level_counts()
+        for run in metaswarm_runs:
+            for commander in run.commanders:
+                if not commander_is_active(commander):
+                    continue
+                metaswarm_level_counts["commanders"] += 1
+                metaswarm_level_counts["squad_leads"] += commander.squad_leads_seen
+                metaswarm_level_counts["workers"] += max(commander.workers_seen, commander.workers_running)
+                metaswarm_level_counts["reviewers"] += commander.reviewers_seen
+                metaswarm_level_counts["other"] += commander.other_children_seen
+        for level, count in metaswarm_level_counts.items():
+            live_level_counts[level] = max(live_level_counts.get(level, 0), count)
         total_live_agents = sum(live_level_counts.values())
         live_agents = all_live_agents[:80]
         live_running_count = sum(
@@ -2914,7 +2926,7 @@ class AgentPulseApp(App):
         self.store.close()
 
 
-VERSION = "2.4.2"
+VERSION = "2.4.3"
 
 BANNER_ART = r"""
     ___   ___  ___ _  _ _____   ___  _   _ _    ___ ___
