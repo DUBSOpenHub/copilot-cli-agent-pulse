@@ -252,6 +252,33 @@ _TOKEN_RE = re.compile(
     r"(?:input_tokens|output_tokens|prompt_tokens|completion_tokens)\s*[:=]\s*(\d+)",
     re.IGNORECASE,
 )
+
+_REQUEST_ONLY_CHILD_EVENTS = {
+    "commander_registered",
+    "launch_requested",
+    "requested",
+}
+_STARTED_CHILD_EVENTS = {
+    "launch_started",
+    "started",
+    "worker_started",
+    "squad_started",
+}
+_COMPLETED_CHILD_EVENTS = {
+    "completed",
+    "complete",
+    "worker_complete",
+    "worker_completed",
+    "squad_complete",
+    "squad_completed",
+}
+_FAILED_CHILD_EVENTS = {
+    "failed",
+    "failure",
+    "error",
+    "launch_blocked",
+    "commander_launch_failed",
+}
 _INPUT_TOKEN_RE = re.compile(
     r"(?:input_tokens|prompt_tokens)\s*[:=]\s*(\d+)", re.IGNORECASE
 )
@@ -1058,6 +1085,7 @@ class StampedeTelemetryCollector:
             return [], empty_child_counts()
 
         latest: Dict[str, MetaswarmChild] = {}
+        requested: Dict[str, MetaswarmChild] = {}
         for line in text.splitlines():
             try:
                 data = json.loads(line)
@@ -1069,15 +1097,26 @@ class StampedeTelemetryCollector:
             if not child_id:
                 continue
             child_id = str(child_id)
-            event = str(data.get("event") or "update")
-            status = str(data.get("status") or event)
+            event = str(data.get("event") or "update").lower()
+            status = str(data.get("status") or event).lower()
             ts = parse_iso_ts(data.get("ts") or data.get("timestamp")) or now_ts()
             previous = latest.get(child_id)
+            request = requested.get(child_id)
             role = data.get("role") or data.get("agent_type")
             if not role and previous:
                 role = previous.role
-            model = data.get("model") if isinstance(data.get("model"), str) else previous.model if previous else None
-            latest[child_id] = MetaswarmChild(
+            if not role and request:
+                role = request.role
+            model = (
+                data.get("model")
+                if isinstance(data.get("model"), str)
+                else previous.model
+                if previous and previous.model
+                else request.model
+                if request
+                else None
+            )
+            child = MetaswarmChild(
                 ts=ts,
                 run_id=run_id,
                 commander_id=commander_id,
@@ -1087,6 +1126,10 @@ class StampedeTelemetryCollector:
                 status=status,
                 model=model,
             )
+            if event in _REQUEST_ONLY_CHILD_EVENTS and status not in {"success", "done", "completed", "failed", "error"}:
+                requested[child_id] = child
+                continue
+            latest[child_id] = child
 
         counts = empty_child_counts()
         counts["total"] = len(latest)
@@ -1095,10 +1138,12 @@ class StampedeTelemetryCollector:
             event = child.event.lower()
             level = classify_agent_level(child.role, child.child_id)
             counts[level] = counts.get(level, 0) + 1
-            if event == "completed" or status in {"success", "done", "completed"}:
+            if event in _COMPLETED_CHILD_EVENTS or status in {"success", "done", "completed", "complete"}:
                 counts["completed"] += 1
-            elif event == "failed" or status in {"failed", "error"}:
+            elif event in _FAILED_CHILD_EVENTS or status in {"failed", "error", "blocked"}:
                 counts["failed"] += 1
+            elif event in _STARTED_CHILD_EVENTS:
+                counts["in_progress"] += 1
             else:
                 counts["in_progress"] += 1
 
