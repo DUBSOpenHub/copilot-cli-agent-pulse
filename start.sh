@@ -182,17 +182,30 @@ case "$TERM_APP" in
         echo "⚡ Agent Pulse launched in a new Warp window."
         ;;
     terminal)
-        osascript -e "
-            tell application \"Terminal\"
-                activate
-                repeat with w in windows
-                    if (name of w) contains \"copilot-cli-agent-pulse\" and (name of w) contains \"-zsh\" then
-                        close w saving no
-                    end if
-                end repeat
-                do script \"$CMD\"
-            end tell" &>/dev/null
-        echo "⚡ Agent Pulse launched in a new Terminal window."
+        TERMINAL_RESULT=$(osascript <<OSA 2>/dev/null
+tell application "Terminal"
+    activate
+    repeat with w in windows
+        if (name of w) contains "copilot-cli-agent-pulse" and (name of w) contains "-zsh" then
+            close w saving no
+        end if
+    end repeat
+    repeat with w in windows
+        if (name of w) contains "agent_pulse.py" or (name of w) contains "AgentPulse" then
+            set index of w to 1
+            return "reused"
+        end if
+    end repeat
+    do script "$CMD"
+    return "launched"
+end tell
+OSA
+)
+        if [ "$TERMINAL_RESULT" = "reused" ]; then
+            echo "⚡ Agent Pulse already running; focused existing Terminal window."
+        else
+            echo "⚡ Agent Pulse launched in a new Terminal window."
+        fi
         ;;
     *)
         # Linux / unknown — fall back through common emulators by availability
@@ -216,17 +229,30 @@ case "$TERM_APP" in
             echo "⚡ Agent Pulse launched in xterm."
         elif command -v osascript &>/dev/null; then
             # macOS last-resort: use Terminal.app
-            osascript -e "
-                tell application \"Terminal\"
-                    activate
-                    repeat with w in windows
-                        if (name of w) contains \"copilot-cli-agent-pulse\" and (name of w) contains \"-zsh\" then
-                            close w saving no
-                        end if
-                    end repeat
-                    do script \"$CMD\"
-                end tell" &>/dev/null
-            echo "⚡ Agent Pulse launched in a new Terminal window."
+            TERMINAL_RESULT=$(osascript <<OSA 2>/dev/null
+tell application "Terminal"
+    activate
+    repeat with w in windows
+        if (name of w) contains "copilot-cli-agent-pulse" and (name of w) contains "-zsh" then
+            close w saving no
+        end if
+    end repeat
+    repeat with w in windows
+        if (name of w) contains "agent_pulse.py" or (name of w) contains "AgentPulse" then
+            set index of w to 1
+            return "reused"
+        end if
+    end repeat
+    do script "$CMD"
+    return "launched"
+end tell
+OSA
+)
+            if [ "$TERMINAL_RESULT" = "reused" ]; then
+                echo "⚡ Agent Pulse already running; focused existing Terminal window."
+            else
+                echo "⚡ Agent Pulse launched in a new Terminal window."
+            fi
         else
             echo "⚠️  Could not detect a terminal emulator — running in the current terminal."
             echo "    (Tip: pass --here to always run in place.)"
