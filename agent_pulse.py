@@ -505,24 +505,27 @@ def classify_agent_level(
 
     if normalized_type == "metaswarm-swarm":
         return "other"
-    if normalized_type == "metaswarm-division" or "division" in haystack or "div-" in haystack:
-        return "division_commanders"
-    if (
-        normalized_type in {"metaswarm-commander", "swarm-command", "stampede-commander"}
-        or "commander" in haystack
-        or "cmd-" in haystack
-        or "hive-auth-" in haystack
-        or "hive1k" in haystack
-    ):
-        return "commanders"
-    if normalized_type in {"metaswarm-squad"} or "squad" in haystack:
-        return "squad_leads"
-    if normalized_type in {"metaswarm-reviewer", "code-review"} or "reviewer" in haystack or "code-review" in haystack:
-        return "reviewers"
     if normalized_type in {"metaswarm-sub-agent", "metaswarm-worker", "stampede-agent", "dispatch-worker"}:
         return "workers"
     if normalized_type in {"task", "explore"}:
         return "workers"
+    if normalized_type in {"metaswarm-squad"}:
+        return "squad_leads"
+    if normalized_type in {"metaswarm-reviewer", "code-review"}:
+        return "reviewers"
+    if normalized_type == "metaswarm-division":
+        return "division_commanders"
+    if normalized_type in {"metaswarm-commander", "swarm-command", "stampede-commander"}:
+        return "commanders"
+
+    if "division" in haystack or "div-" in haystack:
+        return "division_commanders"
+    if "commander" in haystack or "cmd-" in haystack or "hive-auth-" in haystack or "hive1k" in haystack:
+        return "commanders"
+    if "squad" in haystack:
+        return "squad_leads"
+    if "reviewer" in haystack or "code-review" in haystack:
+        return "reviewers"
     if "worker" in haystack or "sub-agent" in haystack or "subagent" in haystack or "leaf" in haystack or "validator" in haystack:
         return "workers"
     if "lead" in haystack:
@@ -1095,6 +1098,36 @@ class StampedeTelemetryCollector:
 
         return sorted(runs.values(), key=run_sort_key, reverse=True)[: self._RUN_DIR_LIMIT]
 
+    @staticmethod
+    def _run_id_ts(run_id: str) -> Optional[int]:
+        match = re.match(r"run-(\d{8})-(\d{6})$", run_id)
+        if not match:
+            return None
+        try:
+            return int(datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).timestamp())
+        except Exception:
+            return None
+
+    def _commander_launch_ts(self, run_dir: Path, run_id: str, commander_id: str, run_state: Dict, commander_state: Dict) -> int:
+        for value in (
+            commander_state.get("created_at"),
+            run_state.get("created_at"),
+            run_state.get("started_at"),
+            commander_state.get("claimed_at"),
+            commander_state.get("last_heartbeat_at"),
+            commander_state.get("updated_at"),
+        ):
+            parsed = parse_iso_ts(value)
+            if parsed:
+                return parsed
+        parsed_run_id = self._run_id_ts(run_id)
+        if parsed_run_id:
+            return parsed_run_id
+        try:
+            return int(run_dir.stat().st_ctime)
+        except OSError:
+            return now_ts()
+
     def _poll_ledger_events(self, ledger: Path, run_id: str, commander_id: str) -> None:
         key = f"stampede-ledger:{ledger}"
         try:
@@ -1125,7 +1158,16 @@ class StampedeTelemetryCollector:
             if not isinstance(data, dict):
                 continue
 
-            child_id = str(data.get("child_id") or data.get("agent_id") or data.get("id") or "sub-agent")
+            child_id_value = (
+                data.get("child_id")
+                or data.get("agent_id")
+                or data.get("id")
+                or data.get("name")
+                or data.get("task_id")
+            )
+            if not child_id_value:
+                continue
+            child_id = str(child_id_value)
             event = str(data.get("event") or "").lower()
             if event in _REQUEST_ONLY_CHILD_EVENTS:
                 requested[child_id] = data
@@ -1264,6 +1306,7 @@ class StampedeTelemetryCollector:
                 if isinstance(line, str) and line.strip()
             ][:5] if isinstance(commentary_lines, list) else []
             commanders: List[MetaswarmCommander] = []
+            commander_launch_events: List[AgentEvent] = []
 
             def metric_int(*values: object, default: int = 0) -> int:
                 for value in values:
@@ -1292,6 +1335,22 @@ class StampedeTelemetryCollector:
                 fleet_meta = fleet.get(commander_id, {}) if isinstance(fleet, dict) else {}
                 if not isinstance(fleet_meta, dict):
                     fleet_meta = {}
+                commander_model = (
+                    commander_state.get("model")
+                    if isinstance(commander_state.get("model"), str)
+                    else fleet_meta.get("model")
+                    if isinstance(fleet_meta.get("model"), str)
+                    else None
+                )
+                commander_launch_events.append(
+                    AgentEvent(
+                        ts=self._commander_launch_ts(run_dir, run_id, commander_id, state, commander_state),
+                        agent_type="stampede-commander",
+                        name=commander_id,
+                        model=commander_model,
+                        source=f"stampede-commander:{run_id}:{commander_id}",
+                    )
+                )
 
                 ledger = commander_dir / "child-agents.jsonl"
                 if ledger.exists():
@@ -1331,13 +1390,7 @@ class StampedeTelemetryCollector:
                     MetaswarmCommander(
                         run_id=run_id,
                         commander_id=commander_id,
-                        model=(
-                            commander_state.get("model")
-                            if isinstance(commander_state.get("model"), str)
-                            else fleet_meta.get("model")
-                            if isinstance(fleet_meta.get("model"), str)
-                            else None
-                        ),
+                        model=commander_model,
                         status=status_text or "unknown",
                         phase=str(commander_state.get("phase") or "unknown"),
                         pid_status=pid_status,
@@ -1455,6 +1508,7 @@ class StampedeTelemetryCollector:
                 )
 
             if commanders:
+                self.store.insert_agent_events(commander_launch_events)
                 runs.append(
                     MetaswarmRun(
                         run_id=run_id,
@@ -2902,9 +2956,10 @@ class RecentTable(DataTable):
         for ts, typ, name, model in rows:
             age = human_age(max(0, now - ts))
             color = TYPE_COLOR.get(typ, TYPE_COLOR["custom"])
+            label = display_agent_type(typ)
             self.add_row(
                 Text(age, style="#8D99AE"),
-                Text(typ, style=f"bold {color}"),
+                Text(label, style=f"bold {color}"),
                 Text(name or "—", style="#C7F9CC" if name else "#8D99AE"),
                 Text(model or "—", style="#8D99AE"),
             )
