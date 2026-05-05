@@ -2584,13 +2584,13 @@ class NeonLogo(Static):
                 (str(m.metaswarm_children_stale), "bold #FFD166"),
             )
             metrics_line_3 = Text.assemble(
-                ("launches 5m ", "#8D99AE"),
+                ("launch events 5m ", "#8D99AE"),
                 (str(m.subagents_last5m), "bold #00F5D4"),
                 (" · velocity ", "#8D99AE"),
                 (f"{m.velocity}/hr", "bold #FFD166"),
                 (" · peak ", "#8D99AE"),
                 (f"{m.peak_velocity}/hr", "bold #FFD166"),
-                (" · launches today ", "#8D99AE"),
+                (" · launch events today ", "#8D99AE"),
                 (str(m.spawned_today), "bold #FF4D6D"),
             )
         else:
@@ -2704,7 +2704,7 @@ class StatPanel(Static):
         )
         trend = "▲ trending up" if m.spawned_today > 0 else "—"
         t.add_row(
-            Text("Launches today  :", style="bold white"),
+            Text("Launch events today:", style="bold white"),
             Text(str(m.spawned_today), style="bold #FF4D6D"),
             Text(trend, style="#8D99AE"),
         )
@@ -2753,7 +2753,7 @@ class HistoryPanel(Static):
             Text(str(m.sessions_month), style="bold #B388FF"),
         )
         t.add_row(
-            Text("Launches", style="bold #7CFF6B"),
+            Text("Launch events", style="bold #7CFF6B"),
             Text(str(m.spawned_today), style="bold #FFD166"),
             Text(str(m.spawned_week), style="bold #00F5D4"),
             Text(str(m.spawned_month), style="bold #B388FF"),
@@ -2765,7 +2765,7 @@ class HistoryPanel(Static):
         t2.add_column(justify="left")
         t2.add_column(justify="left")
         t2.add_row(
-            Text("14d launches  ", style="bold #7CFF6B"),
+            Text("14d launch events", style="bold #7CFF6B"),
             Text(sparkline(daily_agents, width=14), style="#7CFF6B"),
         )
         t2.add_row(
@@ -2884,7 +2884,7 @@ class SignalPanel(Static):
             Text(sparkline(sessions, width=24), style="#7CFF6B"),
         )
         grid.add_row(
-            Text("launches(5m)", style="bold #FFD166"),
+            Text("launch events(5m)", style="bold #FFD166"),
             Text(sparkline(launches, width=24), style="#FFD166"),
         )
         return Panel(grid, border_style="#B388FF", title="[bold #FF4D6D]🔥 HEATMAP + SIGNAL[/]")
