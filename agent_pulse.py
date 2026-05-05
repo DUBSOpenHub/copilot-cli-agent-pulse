@@ -120,6 +120,20 @@ LEVEL_KEYS = (
 TERMINAL_COMMANDER_STATUSES = {"success", "partial", "complete", "completed", "done", "failed", "error", "blocked"}
 TERMINAL_SUCCESS_COMMANDER_STATUSES = {"success", "partial", "complete", "completed", "done"}
 
+
+def terminal_commander_status_label(status: str) -> str:
+    normalized = (status or "").lower()
+    if normalized == "blocked":
+        return "BLOCKED"
+    if normalized in {"failed", "error"}:
+        return "FAILED"
+    if normalized == "partial":
+        return "PARTIAL"
+    if normalized in TERMINAL_SUCCESS_COMMANDER_STATUSES:
+        return "DONE"
+    return "STALE"
+
+
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
 _WAVE_CHARS = "▁▂▃▄▅▆▇█▇▆▅▄▃▂▁"
 _HEARTBEATS = ["💗", "💖", "💓", "❤️", "💓", "💗"]
@@ -1383,15 +1397,57 @@ class StampedeTelemetryCollector:
                             commander_state.get("atoms_received"),
                         ),
                         heartbeat_age_s=heartbeat_age,
-                        child_agents_seen=int(child_counts.get("total") or 0),
+                        child_agents_seen=max(
+                            int(child_counts.get("total") or 0),
+                            metric_int(
+                                telemetry.get("squad_leads_launched"),
+                                commander_state.get("squad_leads_launched"),
+                            )
+                            + metric_int(
+                                telemetry.get("workers_launched"),
+                                commander_state.get("workers_launched"),
+                            ),
+                        ),
                         child_agents_running=child_in_progress if commander_active else 0,
-                        child_agents_completed=int(child_counts.get("completed") or 0),
-                        child_agents_failed=int(child_counts.get("failed") or 0),
-                        child_agents_stale=0 if commander_active else child_in_progress,
+                        child_agents_completed=max(
+                            int(child_counts.get("completed") or 0),
+                            metric_int(
+                                telemetry.get("squad_leads_completed"),
+                                commander_state.get("squad_leads_completed"),
+                            )
+                            + metric_int(
+                                telemetry.get("workers_completed"),
+                                commander_state.get("workers_completed"),
+                            ),
+                        ),
+                        child_agents_failed=max(
+                            int(child_counts.get("failed") or 0),
+                            metric_int(
+                                telemetry.get("squad_leads_failed"),
+                                commander_state.get("squad_leads_failed"),
+                            )
+                            + metric_int(
+                                telemetry.get("workers_failed"),
+                                commander_state.get("workers_failed"),
+                            ),
+                        ),
+                        child_agents_stale=0 if commander_active or status_text in TERMINAL_COMMANDER_STATUSES else child_in_progress,
                         division_commanders_seen=int(child_counts.get("division_commanders") or 0),
                         commanders_seen=int(child_counts.get("commanders") or 0),
-                        squad_leads_seen=int(child_counts.get("squad_leads") or 0),
-                        workers_seen=int(child_counts.get("workers") or 0),
+                        squad_leads_seen=max(
+                            int(child_counts.get("squad_leads") or 0),
+                            metric_int(
+                                telemetry.get("squad_leads_launched"),
+                                commander_state.get("squad_leads_launched"),
+                            ),
+                        ),
+                        workers_seen=max(
+                            int(child_counts.get("workers") or 0),
+                            metric_int(
+                                telemetry.get("workers_launched"),
+                                commander_state.get("workers_launched"),
+                            ),
+                        ),
                         reviewers_seen=int(child_counts.get("reviewers") or 0),
                         other_children_seen=int(child_counts.get("other") or 0),
                         recent_children=recent_children,
@@ -1493,12 +1549,8 @@ class StampedeTelemetryCollector:
                     )
                 )
                 if commander_agent_id not in seen_stampede_agents:
-                    if commander.status == "blocked":
-                        commander_status = "BLOCKED"
-                    elif commander.status in {"failed", "error"}:
-                        commander_status = "FAILED"
-                    elif commander.status in {"success", "done", "completed"}:
-                        commander_status = "DONE"
+                    if commander_status_text in TERMINAL_COMMANDER_STATUSES:
+                        commander_status = terminal_commander_status_label(commander_status_text)
                     elif commander_active:
                         commander_status = "RUN"
                     else:
@@ -1516,7 +1568,14 @@ class StampedeTelemetryCollector:
                         )
                     )
                 if commander.child_agents_seen:
-                    summary_status = "RUN" if commander_active and commander.child_agents_running else "STALE" if commander.child_agents_stale else "DONE"
+                    if commander_status_text in TERMINAL_COMMANDER_STATUSES:
+                        summary_status = terminal_commander_status_label(commander_status_text)
+                    elif commander_active and commander.child_agents_running:
+                        summary_status = "RUN"
+                    elif commander.child_agents_stale:
+                        summary_status = "STALE"
+                    else:
+                        summary_status = "DONE"
                     live.append(
                         LiveAgent(
                             source="metaswarm",
@@ -1525,7 +1584,7 @@ class StampedeTelemetryCollector:
                             name=(
                                 f"sub-agents {commander.child_agents_seen} "
                                 f"(div {commander.division_commanders_seen}, cmd {commander.commanders_seen}, "
-                                f"sq {commander.squad_leads_seen}, sub {commander.workers_seen}, "
+                                f"sq {commander.squad_leads_seen}, workers {commander.workers_seen}, "
                                 f"rev {commander.reviewers_seen}, other {commander.other_children_seen}; "
                                 f"run {commander.child_agents_running}, stale {commander.child_agents_stale}, "
                                 f"done {commander.child_agents_completed}, fail {commander.child_agents_failed})"
@@ -2038,16 +2097,7 @@ class MetricsEngine:
 
     @staticmethod
     def _terminal_commander_status(status: str) -> str:
-        normalized = (status or "").lower()
-        if normalized == "blocked":
-            return "BLOCKED"
-        if normalized in {"failed", "error"}:
-            return "FAILED"
-        if normalized == "partial":
-            return "PARTIAL"
-        if normalized in TERMINAL_SUCCESS_COMMANDER_STATUSES:
-            return "DONE"
-        return "STALE"
+        return terminal_commander_status_label(status)
 
     @staticmethod
     def _stampede_commander_key(agent: LiveAgent) -> Optional[Tuple[str, str]]:
