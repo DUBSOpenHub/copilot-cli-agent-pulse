@@ -271,12 +271,14 @@ _COMPLETED_CHILD_EVENTS = {
     "worker_completed",
     "squad_complete",
     "squad_completed",
+    "launch_completed",
 }
 _FAILED_CHILD_EVENTS = {
     "failed",
     "failure",
     "error",
     "launch_blocked",
+    "launch_failed",
     "commander_launch_failed",
 }
 _INPUT_TOKEN_RE = re.compile(
@@ -347,6 +349,8 @@ class MetaswarmChild:
     event: str
     status: str
     model: Optional[str] = None
+    parent_id: Optional[str] = None
+    summary: Optional[str] = None
 
 
 @dataclass
@@ -390,6 +394,7 @@ class MetaswarmRun:
     profile: str
     commanders: List[MetaswarmCommander] = field(default_factory=list)
     commentary: List[str] = field(default_factory=list)
+    commander_target: int = 0
 
 
 @dataclass
@@ -417,16 +422,56 @@ def empty_child_counts() -> Dict[str, int]:
         "in_progress": 0,
     }
     counts.update(empty_level_counts())
+    for level in LEVEL_KEYS:
+        counts[f"{level}_in_progress"] = 0
+        counts[f"{level}_completed"] = 0
+        counts[f"{level}_failed"] = 0
     return counts
 
 
 def display_agent_type(agent_type: str) -> str:
     """Map legacy/internal type names to user-facing dashboard labels."""
     return {
-        "metaswarm-worker": "metaswarm-sub-agent",
-        "stampede-agent": "stampede-sub-agent",
+        "metaswarm-division": "division-commander",
+        "metaswarm-commander": "commander",
+        "metaswarm-swarm": "commander-sub-agents",
+        "metaswarm-squad": "squad-lead",
+        "metaswarm-sub-agent": "sub-agent",
+        "metaswarm-worker": "sub-agent",
+        "metaswarm-reviewer": "reviewer",
+        "stampede-agent": "sub-agent",
+        "stampede-commander": "commander",
         "dispatch-worker": "dispatch-sub-agent",
     }.get(agent_type, agent_type)
+
+
+def child_activity_text(data: Dict) -> Optional[str]:
+    """Return a compact description of what a commander child is doing."""
+    for key in ("summary", "description", "task", "title", "objective", "activity", "phase"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:90]
+    slice_value = data.get("slice")
+    if isinstance(slice_value, dict):
+        parts = [
+            f"{key}:{value}"
+            for key, value in slice_value.items()
+            if value is not None and str(value).strip()
+        ]
+        if parts:
+            return " ".join(parts)[:90]
+    assignment = data.get("assignment")
+    if isinstance(assignment, dict):
+        for key in ("summary", "description", "task", "title", "objective"):
+            value = assignment.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:90]
+    return None
+
+
+def child_display_name(commander_id: str, child_id: str, summary: Optional[str] = None) -> str:
+    base = f"{commander_id} / {child_id}"
+    return f"{base} - {summary}" if summary else base
 
 
 def classify_agent_level(
@@ -1047,6 +1092,7 @@ class StampedeTelemetryCollector:
 
         events: List[AgentEvent] = []
         line_offset = last_off
+        requested: Dict[str, Dict] = {}
         for raw_line in chunk.splitlines():
             source = f"stampede:{run_id}:{commander_id}:{line_offset}"
             line_offset += len(raw_line) + 1
@@ -1054,18 +1100,31 @@ class StampedeTelemetryCollector:
                 data = json.loads(raw_line.decode("utf-8", errors="replace"))
             except (json.JSONDecodeError, ValueError):
                 continue
-            if not isinstance(data, dict) or data.get("event") != "launch_started":
+            if not isinstance(data, dict):
                 continue
 
             child_id = str(data.get("child_id") or data.get("agent_id") or data.get("id") or "sub-agent")
+            event = str(data.get("event") or "").lower()
+            if event in _REQUEST_ONLY_CHILD_EVENTS:
+                requested[child_id] = data
+                continue
+            if event != "launch_started":
+                continue
+
+            request = requested.get(child_id)
+            if request:
+                merged = dict(request)
+                merged.update(data)
+                data = merged
             role = str(data.get("role") or data.get("agent_type") or "sub-agent")
             agent_type = agent_type_for_child_role(role, child_id)
             ts = parse_iso_ts(data.get("ts") or data.get("timestamp")) or now_ts()
+            summary = child_activity_text(data)
             events.append(
                 AgentEvent(
                     ts=ts,
                     agent_type=agent_type,
-                    name=f"{commander_id}/{child_id}",
+                    name=child_display_name(commander_id, child_id, summary),
                     model=data.get("model") if isinstance(data.get("model"), str) else None,
                     source=source,
                     outcome="unknown",
@@ -1107,6 +1166,16 @@ class StampedeTelemetryCollector:
                 role = previous.role
             if not role and request:
                 role = request.role
+            parent_id = data.get("parent_id")
+            if not parent_id and previous:
+                parent_id = previous.parent_id
+            if not parent_id and request:
+                parent_id = request.parent_id
+            summary = child_activity_text(data)
+            if not summary and previous:
+                summary = previous.summary
+            if not summary and request:
+                summary = request.summary
             model = (
                 data.get("model")
                 if isinstance(data.get("model"), str)
@@ -1125,6 +1194,8 @@ class StampedeTelemetryCollector:
                 event=event,
                 status=status,
                 model=model,
+                parent_id=str(parent_id) if parent_id else None,
+                summary=summary,
             )
             if event in _REQUEST_ONLY_CHILD_EVENTS and status not in {"success", "done", "completed", "failed", "error"}:
                 requested[child_id] = child
@@ -1140,12 +1211,16 @@ class StampedeTelemetryCollector:
             counts[level] = counts.get(level, 0) + 1
             if event in _COMPLETED_CHILD_EVENTS or status in {"success", "done", "completed", "complete"}:
                 counts["completed"] += 1
+                counts[f"{level}_completed"] = counts.get(f"{level}_completed", 0) + 1
             elif event in _FAILED_CHILD_EVENTS or status in {"failed", "error", "blocked"}:
                 counts["failed"] += 1
+                counts[f"{level}_failed"] = counts.get(f"{level}_failed", 0) + 1
             elif event in _STARTED_CHILD_EVENTS:
                 counts["in_progress"] += 1
+                counts[f"{level}_in_progress"] = counts.get(f"{level}_in_progress", 0) + 1
             else:
                 counts["in_progress"] += 1
+                counts[f"{level}_in_progress"] = counts.get(f"{level}_in_progress", 0) + 1
 
         return sorted(latest.values(), key=lambda c: c.ts, reverse=True)[:limit], counts
 
@@ -1167,6 +1242,16 @@ class StampedeTelemetryCollector:
                 if isinstance(line, str) and line.strip()
             ][:5] if isinstance(commentary_lines, list) else []
             commanders: List[MetaswarmCommander] = []
+
+            def metric_int(*values: object, default: int = 0) -> int:
+                for value in values:
+                    if value is None or value == "":
+                        continue
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        continue
+                return default
 
             for commander_dir in sorted((run_dir / "commanders").glob("commander-*")):
                 commander_id = commander_dir.name
@@ -1234,17 +1319,61 @@ class StampedeTelemetryCollector:
                         status=status_text or "unknown",
                         phase=str(commander_state.get("phase") or "unknown"),
                         pid_status=pid_status,
-                        squad_leads_launched=int(telemetry.get("squad_leads_launched") or 0),
-                        squad_leads_target=int(telemetry.get("squad_leads_target") or 0),
-                        squad_leads_running=int(telemetry.get("squad_leads_running") or 0),
-                        squad_leads_completed=int(telemetry.get("squad_leads_completed") or 0),
-                        squad_leads_failed=int(telemetry.get("squad_leads_failed") or 0),
-                        workers_launched=int(telemetry.get("workers_launched") or 0),
-                        workers_target=int(telemetry.get("workers_target") or 0),
-                        workers_running=int(telemetry.get("workers_running") or 0),
-                        workers_completed=int(telemetry.get("workers_completed") or 0),
-                        workers_failed=int(telemetry.get("workers_failed") or 0),
-                        atoms_received=int(telemetry.get("atoms_received") or 0),
+                        squad_leads_launched=metric_int(
+                            telemetry.get("squad_leads_launched"),
+                            commander_state.get("squad_leads_launched"),
+                            child_counts.get("squad_leads"),
+                        ),
+                        squad_leads_target=metric_int(
+                            telemetry.get("squad_leads_target"),
+                            commander_state.get("squad_leads_target"),
+                            commander_state.get("squads_target"),
+                            default=50,
+                        ),
+                        squad_leads_running=metric_int(
+                            telemetry.get("squad_leads_running"),
+                            commander_state.get("squad_leads_running"),
+                            child_counts.get("squad_leads_in_progress"),
+                        ),
+                        squad_leads_completed=metric_int(
+                            telemetry.get("squad_leads_completed"),
+                            commander_state.get("squad_leads_completed"),
+                            child_counts.get("squad_leads_completed"),
+                        ),
+                        squad_leads_failed=metric_int(
+                            telemetry.get("squad_leads_failed"),
+                            commander_state.get("squad_leads_failed"),
+                            child_counts.get("squad_leads_failed"),
+                        ),
+                        workers_launched=metric_int(
+                            telemetry.get("workers_launched"),
+                            commander_state.get("workers_launched"),
+                            child_counts.get("workers"),
+                        ),
+                        workers_target=metric_int(
+                            telemetry.get("workers_target"),
+                            commander_state.get("workers_target"),
+                            default=250,
+                        ),
+                        workers_running=metric_int(
+                            telemetry.get("workers_running"),
+                            commander_state.get("workers_running"),
+                            child_counts.get("workers_in_progress"),
+                        ),
+                        workers_completed=metric_int(
+                            telemetry.get("workers_completed"),
+                            commander_state.get("workers_completed"),
+                            child_counts.get("workers_completed"),
+                        ),
+                        workers_failed=metric_int(
+                            telemetry.get("workers_failed"),
+                            commander_state.get("workers_failed"),
+                            child_counts.get("workers_failed"),
+                        ),
+                        atoms_received=metric_int(
+                            telemetry.get("atoms_received"),
+                            commander_state.get("atoms_received"),
+                        ),
                         heartbeat_age_s=heartbeat_age,
                         child_agents_seen=int(child_counts.get("total") or 0),
                         child_agents_running=child_in_progress if commander_active else 0,
@@ -1269,6 +1398,11 @@ class StampedeTelemetryCollector:
                         profile=profile,
                         commanders=commanders,
                         commentary=commentary,
+                        commander_target=metric_int(
+                            state.get("commander_count"),
+                            state.get("total_tasks"),
+                            default=len(commanders),
+                        ),
                     )
                 )
 
@@ -1284,6 +1418,10 @@ class StampedeTelemetryCollector:
             state = self._read_json(run_dir / "state.json")
             fleet = self._read_json(run_dir / "fleet.json")
             run_id = str(state.get("run_id") or run_dir.name)
+            if metaswarm_runs is not None:
+                allowed_run_ids = {run.run_id for run in metaswarm_runs}
+                if run_id not in allowed_run_ids:
+                    continue
             try:
                 run_age_s = max(0, now - int(run_dir.stat().st_mtime))
             except OSError:
@@ -1407,11 +1545,11 @@ class StampedeTelemetryCollector:
                             source="metaswarm",
                             agent_id=f"{run.run_id}/{commander.commander_id}/{child.child_id}",
                             agent_type=agent_type,
-                            name=child.child_id,
+                            name=child_display_name(commander.commander_id, child.child_id, child.summary),
                             status=status,
                             age_s=max(0, now - child.ts),
                             model=child.model,
-                            parent=commander.commander_id,
+                            parent=run.run_id,
                         )
                     )
 
@@ -1835,6 +1973,7 @@ class PulseMetrics:
     launch_level_counts_5m: Dict[str, int] = None
     metaswarm_runs: List[MetaswarmRun] = None
     metaswarm_active_commanders: int = 0
+    metaswarm_total_commanders: int = 0
     metaswarm_children_running: int = 0
     metaswarm_children_last5m: int = 0
     metaswarm_children_seen: int = 0
@@ -2104,44 +2243,48 @@ class MetricsEngine:
                 return False
             return c.status in {"running", "starting"} and (c.heartbeat_age_s is None or c.heartbeat_age_s < 90)
 
+        active_metaswarm_runs = [
+            run
+            for run in metaswarm_runs
+            if any(commander_is_active(c) for c in run.commanders)
+        ]
+        display_metaswarm_runs = active_metaswarm_runs or (metaswarm_runs[:1] if metaswarm_runs else [])
+
         def commander_running_workers(c: MetaswarmCommander) -> int:
             # Prefer commander telemetry for "running now"; ledgers can retain
             # launch_started rows after a worker has completed and inflate live counts.
-            if c.workers_launched or c.workers_completed or c.workers_failed or c.workers_target:
-                return max(0, c.workers_running)
-            return max(0, c.child_agents_running)
+            derived = max(0, c.workers_seen - c.workers_completed - c.workers_failed)
+            return max(0, c.workers_running, derived)
 
         def commander_running_squad_leads(c: MetaswarmCommander) -> int:
-            if (
-                c.squad_leads_launched
-                or c.squad_leads_completed
-                or c.squad_leads_failed
-                or c.squad_leads_target
-            ):
-                return max(0, c.squad_leads_running)
-            return 0
+            derived = max(0, c.squad_leads_seen - c.squad_leads_completed - c.squad_leads_failed)
+            return max(0, c.squad_leads_running, derived)
 
         metaswarm_children_running = sum(
             commander_running_workers(c)
-            for run in metaswarm_runs
+            for run in display_metaswarm_runs
             for c in run.commanders
             if commander_is_active(c)
         )
         metaswarm_children_seen = sum(
             c.child_agents_seen
-            for run in metaswarm_runs
+            for run in display_metaswarm_runs
             for c in run.commanders
         )
         metaswarm_children_stale = sum(
             c.child_agents_stale
-            for run in metaswarm_runs
+            for run in display_metaswarm_runs
             for c in run.commanders
         )
         metaswarm_active_commanders = sum(
             1
-            for run in metaswarm_runs
+            for run in display_metaswarm_runs
             for c in run.commanders
             if commander_is_active(c)
+        )
+        metaswarm_total_commanders = sum(
+            max(run.commander_target or 0, len(run.commanders))
+            for run in display_metaswarm_runs
         )
         metaswarm_type_counts = self.store.agent_events_by_type_since(ts - 5 * 60)
         metaswarm_children_last5m = sum(
@@ -2153,8 +2296,8 @@ class MetricsEngine:
         live_agents: List[LiveAgent] = []
         live_agents.extend(self._live_from_processes(procs, ts))
         live_agents.extend(self.tmux.collect())
-        live_agents.extend(self.stampede.live_agents(metaswarm_runs))
-        live_agents = self._normalize_terminal_stampede_commanders(live_agents, metaswarm_runs, procs)
+        live_agents.extend(self.stampede.live_agents(display_metaswarm_runs))
+        live_agents = self._normalize_terminal_stampede_commanders(live_agents, display_metaswarm_runs, procs)
         for ev_ts, ev_type, ev_name, ev_model in self.store.running_agent_events_since(
             ts - LIVE_EVENT_WINDOW_S,
             limit=500,
@@ -2213,12 +2356,12 @@ class MetricsEngine:
                 metaswarm_level_counts["workers"] += commander_running_workers(commander)
                 metaswarm_level_counts["reviewers"] += commander.reviewers_seen
                 metaswarm_level_counts["other"] += commander.other_children_seen
-        if metaswarm_runs:
+        if display_metaswarm_runs:
             # For Stampede/Agent Conductor runs, commander telemetry is the
             # authoritative source for live swarm levels. Process/event scans are
             # useful hints, but stale tmux panes and recent launch logs can
             # over-count completed commanders and sub-agents.
-            for level in ("division_commanders", "commanders", "squad_leads", "workers", "reviewers"):
+            for level in ("division_commanders", "commanders", "squad_leads", "workers", "reviewers", "other"):
                 live_level_counts[level] = metaswarm_level_counts.get(level, 0)
         else:
             for level, count in metaswarm_level_counts.items():
@@ -2236,7 +2379,7 @@ class MetricsEngine:
         # breakdown by accidentally including commanders, squads, or reviewers.
         running_subagents = (
             metaswarm_children_running
-            if metaswarm_runs
+            if display_metaswarm_runs
             else live_level_counts.get("workers", 0)
         )
         subagents_last5m = agent_events_last5m
@@ -2267,7 +2410,7 @@ class MetricsEngine:
         health_score = int(clamp(health_score, 0, 100))
 
         commander_alerts: List[Dict[str, str]] = []
-        for run in metaswarm_runs:
+        for run in display_metaswarm_runs:
             for commander in run.commanders:
                 status = (commander.status or "unknown").lower()
                 if commander.pid_status == "dead" and status not in TERMINAL_SUCCESS_COMMANDER_STATUSES:
@@ -2312,8 +2455,9 @@ class MetricsEngine:
             total_live_agents=total_live_agents,
             live_level_counts=live_level_counts,
             launch_level_counts_5m=launch_level_counts_5m,
-            metaswarm_runs=metaswarm_runs,
+            metaswarm_runs=display_metaswarm_runs,
             metaswarm_active_commanders=metaswarm_active_commanders,
+            metaswarm_total_commanders=metaswarm_total_commanders,
             metaswarm_children_running=metaswarm_children_running,
             metaswarm_children_last5m=metaswarm_children_last5m,
             metaswarm_children_seen=metaswarm_children_seen,
@@ -2354,13 +2498,16 @@ class NeonLogo(Static):
             levels = m.live_level_counts or empty_level_counts()
             division_commanders = levels.get("division_commanders", 0)
             commanders = levels.get("commanders", 0)
+            commander_total = m.metaswarm_total_commanders or commanders
             sessions = m.active_sessions
             metrics_line_1 = Text.assemble(
                 (f"  {heart}  ", ""),
-                ("total agents ", "#8D99AE"),
-                (str(m.spawned_all_time), "bold #FFD166"),
-                (" · live agents ", "#8D99AE"),
+                ("live agents ", "#8D99AE"),
                 (str(m.total_live_agents), "bold #00F5D4"),
+                (" · cmd ", "#8D99AE"),
+                (f"{commanders}/{commander_total}", "bold #00F5D4"),
+                (" · squads ", "#8D99AE"),
+                (str(levels.get("squad_leads", 0)), "bold #FFD166"),
                 (" · live sub-agents ", "#8D99AE"),
                 (str(m.running_subagents), "bold #7CFF6B"),
                 (" · sessions ", "#8D99AE"),
@@ -2369,16 +2516,14 @@ class NeonLogo(Static):
             metrics_line_2 = Text.assemble(
                 ("div ", "#8D99AE"),
                 (str(division_commanders), "bold #B388FF"),
-                (" · cmd ", "#8D99AE"),
-                (str(commanders), "bold #00F5D4"),
-                (" · squads ", "#8D99AE"),
-                (str(levels.get("squad_leads", 0)), "bold #FFD166"),
-                (" · sub-agents ", "#8D99AE"),
-                (str(levels.get("workers", 0)), "bold #7CFF6B"),
                 (" · reviewers ", "#8D99AE"),
                 (str(levels.get("reviewers", 0)), "bold #FF4D6D"),
                 (" · other ", "#8D99AE"),
                 (str(levels.get("other", 0)), "bold #8D99AE"),
+                (" · seen ", "#8D99AE"),
+                (str(m.metaswarm_children_seen), "bold #00F5D4"),
+                (" · stale ", "#8D99AE"),
+                (str(m.metaswarm_children_stale), "bold #FFD166"),
             )
             metrics_line_3 = Text.assemble(
                 ("launches 5m ", "#8D99AE"),
@@ -2448,6 +2593,7 @@ class StatPanel(Static):
         levels = m.live_level_counts or empty_level_counts()
         division_commanders = levels.get("division_commanders", 0)
         commanders = levels.get("commanders", 0)
+        commander_total = m.metaswarm_total_commanders or commanders
         t.add_row(
             Text("Sessions        :", style="bold white"),
             Text(str(m.active_sessions), style="bold #7CFF6B"),
@@ -2465,7 +2611,7 @@ class StatPanel(Static):
         )
         t.add_row(
             Text("Commanders      :", style="bold white"),
-            Text(str(commanders), style="bold #00F5D4"),
+            Text(f"{commanders}/{commander_total}", style="bold #00F5D4"),
             bar(commanders),
         )
         t.add_row(
@@ -2594,7 +2740,7 @@ class MixPanel(Static):
         total_24h = sum(by_type.values())
         title = (
             f"[bold #FFD166]◆ LAUNCH EVENT BREAKDOWN[/]  "
-            f"[#8D99AE]· live runs[/] [bold #B388FF]{m.running_subagents}[/]  "
+            f"[#8D99AE]· live agents[/] [bold #B388FF]{m.total_live_agents}[/]  "
             f"[#8D99AE]· 24h events[/] [bold #FFD166]{total_24h}[/]"
         )
         if not by_type:
@@ -2688,7 +2834,7 @@ class SignalPanel(Static):
 
 class RecentTable(DataTable):
     def on_mount(self) -> None:
-        self.add_columns("AGE", "TYPE", "NAME", "MODEL")
+        self.add_columns("AGE", "TYPE", "COMMANDER / ACTIVITY", "MODEL")
         self.zebra_stripes = True
         self.show_cursor = False
 
@@ -2773,11 +2919,12 @@ class LiveRunsPanel(Static):
         running = m.total_live_agents
         division_commanders = levels.get("division_commanders", 0)
         commanders = levels.get("commanders", 0)
+        commander_total = m.metaswarm_total_commanders or commanders
         title = (
             f"[bold #00F5D4]◉ LIVE RUNS + SWARM SUB-AGENTS[/]  "
             f"[#8D99AE]· running[/] [bold #7CFF6B]{running}[/]  "
             f"[#8D99AE]· div[/] [bold #B388FF]{division_commanders}[/]  "
-            f"[#8D99AE]· cmd[/] [bold #00F5D4]{commanders}[/]  "
+            f"[#8D99AE]· cmd[/] [bold #00F5D4]{commanders}/{commander_total}[/]  "
             f"[#8D99AE]· squads[/] [bold #FFD166]{levels.get('squad_leads', 0)}[/]  "
             f"[#8D99AE]· sub-agents[/] [bold #7CFF6B]{levels.get('workers', 0)}[/]  "
             f"[#8D99AE]· rev[/] [bold #FF4D6D]{levels.get('reviewers', 0)}[/]"
@@ -2846,7 +2993,7 @@ class LiveRunsPanel(Static):
             f"{levels.get('workers', 0)} sub-agents · "
             f"{levels.get('reviewers', 0)} reviewers · "
             f"{levels.get('other', 0)} other.  "
-            f"Metaswarm ledgers: {m.metaswarm_active_commanders} commanders · "
+            f"Stampede ledgers: {m.metaswarm_active_commanders}/{commander_total} commanders · "
             f"{m.metaswarm_children_seen} sub-agents seen · "
             f"{m.metaswarm_children_running} running · "
             f"{m.metaswarm_children_stale} stale · "
@@ -3358,8 +3505,10 @@ def _mode_export() -> None:
         "model_dist_24h": m.model_dist_24h,
         "live_agents": [dataclasses.asdict(a) for a in m.live_agents],
         "commander_alerts": m.commander_alerts,
+        "metaswarm_total_commanders": m.metaswarm_total_commanders,
         "metaswarm": {
             "active_commanders": m.metaswarm_active_commanders,
+            "total_commanders": m.metaswarm_total_commanders,
             "sub_agents_seen": m.metaswarm_children_seen,
             "sub_agents_running": m.metaswarm_children_running,
             "sub_agents_stale": m.metaswarm_children_stale,
