@@ -98,7 +98,20 @@ if [ "$MODE" = "here" ]; then
 fi
 
 # --- Otherwise, spawn in a new window/pane of the user's terminal emulator ---
-CMD="export AGENT_PULSE_SPAWNED=1; cd '$SCRIPT_DIR' && '$VENV/bin/python' '$SCRIPT_DIR/agent_pulse.py' ${PASSTHROUGH_ARGS[*]}"
+shell_quote() {
+    printf "%q" "$1"
+}
+
+QUOTED_ARGS=""
+for arg in "${PASSTHROUGH_ARGS[@]}"; do
+    QUOTED_ARGS+=" $(shell_quote "$arg")"
+done
+
+CMD="export AGENT_PULSE_SPAWNED=1"
+if [ -n "${AGENT_PULSE_SCAN_ROOTS:-}" ]; then
+    CMD+="; export AGENT_PULSE_SCAN_ROOTS=$(shell_quote "$AGENT_PULSE_SCAN_ROOTS")"
+fi
+CMD+="; cd $(shell_quote "$SCRIPT_DIR") && exec $(shell_quote "$VENV/bin/python") $(shell_quote "$SCRIPT_DIR/agent_pulse.py")${QUOTED_ARGS}"
 
 # tmux — open a new window in the current session
 if [ -n "$TMUX" ]; then
@@ -172,6 +185,11 @@ case "$TERM_APP" in
         osascript -e "
             tell application \"Terminal\"
                 activate
+                repeat with w in windows
+                    if (name of w) contains \"copilot-cli-agent-pulse\" and (name of w) contains \"-zsh\" then
+                        close w saving no
+                    end if
+                end repeat
                 do script \"$CMD\"
             end tell" &>/dev/null
         echo "⚡ Agent Pulse launched in a new Terminal window."
@@ -201,6 +219,11 @@ case "$TERM_APP" in
             osascript -e "
                 tell application \"Terminal\"
                     activate
+                    repeat with w in windows
+                        if (name of w) contains \"copilot-cli-agent-pulse\" and (name of w) contains \"-zsh\" then
+                            close w saving no
+                        end if
+                    end repeat
                     do script \"$CMD\"
                 end tell" &>/dev/null
             echo "⚡ Agent Pulse launched in a new Terminal window."

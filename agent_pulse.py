@@ -3286,6 +3286,7 @@ class AgentPulseApp(App):
     _prev_error_rate_high: bool = False
     _alerted_milestones: set = None
     _alerted_commanders: set = None
+    _alerts_ready: bool = False
 
     def __init__(self) -> None:
         super().__init__()
@@ -3293,6 +3294,7 @@ class AgentPulseApp(App):
         self.engine = MetricsEngine(self.store)
         self._alerted_milestones = set()
         self._alerted_commanders = set()
+        self._alerts_ready = False
 
     def compose(self) -> ComposeResult:
         yield Vertical(
@@ -3438,9 +3440,10 @@ class AgentPulseApp(App):
         if self._paused:
             return
         m = self.engine.poll()
+        suppress_alerts = not self._alerts_ready
 
         # Feature 5: Alert on new agent launches
-        if self._prev_spawned > 0 and m.spawned_all_time > self._prev_spawned:
+        if not suppress_alerts and self._prev_spawned > 0 and m.spawned_all_time > self._prev_spawned:
             diff = m.spawned_all_time - self._prev_spawned
             if m.recent_events:
                 latest_type = m.recent_events[0][1]
@@ -3448,7 +3451,7 @@ class AgentPulseApp(App):
 
         # Feature 5: Error rate alert
         error_high = m.error_count_24h > 3
-        if error_high and not self._prev_error_rate_high:
+        if not suppress_alerts and error_high and not self._prev_error_rate_high:
             self.notify("🔴 Error rate elevated", severity="error", timeout=6)
         self._prev_error_rate_high = error_high
 
@@ -3460,16 +3463,18 @@ class AgentPulseApp(App):
             if key in self._alerted_commanders:
                 continue
             self._alerted_commanders.add(key)
-            self.notify(f"🛑 {alert.get('message', 'Commander died before completing')}", severity="error", timeout=10)
+            if not suppress_alerts:
+                self.notify(f"🛑 {alert.get('message', 'Commander died before completing')}", severity="error", timeout=10)
 
         # Feature 5: Milestones
         for milestone in (10, 50, 100, 500, 1000):
             if m.spawned_all_time >= milestone and milestone not in self._alerted_milestones:
                 self._alerted_milestones.add(milestone)
-                if self._prev_spawned > 0:  # don't alert on first load
+                if not suppress_alerts and self._prev_spawned > 0:
                     self.notify(f"🎉 Milestone: {milestone} agents!", timeout=8)
 
         self._prev_spawned = m.spawned_all_time
+        self._alerts_ready = True
 
         # Update all widgets
         self.logo.metrics = m
