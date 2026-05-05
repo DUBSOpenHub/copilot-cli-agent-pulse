@@ -1010,11 +1010,11 @@ class StampedeTelemetryCollector:
             for p in os.environ.get("AGENT_PULSE_SCAN_ROOTS", "").split(os.pathsep)
             if p
         ]
-        roots = [Path.cwd(), Path.home(), Path.home() / "dev", Path.home() / "tmp", *env_roots]
+        roots = env_roots if env_roots else [Path.cwd(), Path.home(), Path.home() / "dev", Path.home() / "tmp"]
         bases: Dict[str, Path] = {}
 
         def add_base(path: Path) -> None:
-            if path.exists() and path.is_dir():
+            if path.exists() and path.is_dir() and path.name == ".stampede":
                 bases[str(path)] = path
 
         def scan_depth(root: Path, max_depth: int = 3) -> None:
@@ -1022,6 +1022,7 @@ class StampedeTelemetryCollector:
             while stack and len(bases) < 100:
                 current, depth = stack.pop()
                 try:
+                    add_base(current)
                     add_base(current / ".stampede")
                     if depth >= max_depth:
                         continue
@@ -1065,13 +1066,20 @@ class StampedeTelemetryCollector:
             except Exception:
                 continue
 
-        def mtime(path: Path) -> float:
+        def run_sort_key(path: Path) -> Tuple[int, float]:
+            match = re.match(r"run-(\d{8})-(\d{6})$", path.name)
+            run_ts = 0
+            if match:
+                try:
+                    run_ts = int(datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S").timestamp())
+                except Exception:
+                    run_ts = 0
             try:
-                return path.stat().st_mtime
+                return (run_ts, path.stat().st_mtime)
             except OSError:
-                return 0.0
+                return (run_ts, 0.0)
 
-        return sorted(runs.values(), key=mtime, reverse=True)[: self._RUN_DIR_LIMIT]
+        return sorted(runs.values(), key=run_sort_key, reverse=True)[: self._RUN_DIR_LIMIT]
 
     def _poll_ledger_events(self, ledger: Path, run_id: str, commander_id: str) -> None:
         key = f"stampede-ledger:{ledger}"
