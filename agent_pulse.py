@@ -411,6 +411,19 @@ class MetaswarmRun:
     commander_target: int = 0
 
 
+def metaswarm_commander_is_active(commander: MetaswarmCommander) -> bool:
+    status = (commander.status or "").lower()
+    if status in TERMINAL_COMMANDER_STATUSES:
+        return False
+    if commander.pid_status == "run":
+        return True
+    if commander.pid_status == "dead":
+        return False
+    return status in {"running", "starting"} and (
+        commander.heartbeat_age_s is None or commander.heartbeat_age_s < 90
+    )
+
+
 @dataclass
 class LiveAgent:
     source: str
@@ -1509,18 +1522,60 @@ class StampedeTelemetryCollector:
 
             if commanders:
                 self.store.insert_agent_events(commander_launch_events)
+                commander_target = metric_int(
+                    state.get("commander_count"),
+                    state.get("total_tasks"),
+                    default=len(commanders),
+                )
+                active_count = sum(
+                    1 for commander in commanders if metaswarm_commander_is_active(commander)
+                )
+                child_running = sum(commander.child_agents_running for commander in commanders)
+                child_completed = sum(commander.child_agents_completed for commander in commanders)
+                child_failed = sum(commander.child_agents_failed for commander in commanders)
+                child_stale = sum(commander.child_agents_stale for commander in commanders)
+                child_seen = sum(commander.child_agents_seen for commander in commanders)
+                queue_count = len(list((run_dir / "queue").glob("*.json"))) if (run_dir / "queue").exists() else 0
+                claimed_count = len(list((run_dir / "claimed").glob("*.json"))) if (run_dir / "claimed").exists() else 0
+                result_count = len(list((run_dir / "results").glob("commander-*.json"))) if (run_dir / "results").exists() else 0
+                collab_counts = {}
+                for ledger_name in ("proposals", "reviews", "improvements", "consensus", "broadcasts"):
+                    ledger_path = run_dir / "collab" / f"{ledger_name}.jsonl"
+                    if ledger_path.exists():
+                        try:
+                            collab_counts[ledger_name] = sum(
+                                1 for line in ledger_path.read_text(errors="replace").splitlines() if line.strip()
+                            )
+                        except OSError:
+                            collab_counts[ledger_name] = 0
+                    else:
+                        collab_counts[ledger_name] = 0
+                computed_commentary = [
+                    (
+                        f"cmd {active_count}/{commander_target} active · "
+                        f"sub-agents {child_running} running / {child_completed} done / "
+                        f"{child_failed} failed / {child_stale} stale / {child_seen} seen · "
+                        f"q {queue_count} · claimed {claimed_count} · results {result_count}/{commander_target}"
+                    ),
+                    (
+                        "collab "
+                        f"p{collab_counts['proposals']} r{collab_counts['reviews']} "
+                        f"i{collab_counts['improvements']} c{collab_counts['consensus']} "
+                        f"b{collab_counts['broadcasts']}"
+                    ),
+                ]
+                raw_commentary = [
+                    line for line in commentary
+                    if not line.startswith("cmd ") and not line.startswith("collab ")
+                ]
                 runs.append(
                     MetaswarmRun(
                         run_id=run_id,
                         repo_path=repo_path,
                         profile=profile,
                         commanders=commanders,
-                        commentary=commentary,
-                        commander_target=metric_int(
-                            state.get("commander_count"),
-                            state.get("total_tasks"),
-                            default=len(commanders),
-                        ),
+                        commentary=[*computed_commentary, *raw_commentary][:5],
+                        commander_target=commander_target,
                     )
                 )
 
@@ -1591,17 +1646,7 @@ class StampedeTelemetryCollector:
             for commander in run.commanders:
                 commander_agent_id = f"{run.run_id}/{commander.commander_id}"
                 commander_status_text = (commander.status or "").lower()
-                commander_active = (
-                    commander_status_text not in TERMINAL_COMMANDER_STATUSES
-                    and commander.pid_status == "run"
-                    or (
-                        commander_status_text not in TERMINAL_COMMANDER_STATUSES
-                        and
-                        commander.pid_status == "unknown"
-                        and commander_status_text in {"running", "starting"}
-                        and (commander.heartbeat_age_s is None or commander.heartbeat_age_s < 90)
-                    )
-                )
+                commander_active = metaswarm_commander_is_active(commander)
                 if commander_agent_id not in seen_stampede_agents:
                     if commander_status_text in TERMINAL_COMMANDER_STATUSES:
                         commander_status = terminal_commander_status_label(commander_status_text)
@@ -2098,6 +2143,8 @@ class PulseMetrics:
     metaswarm_children_running: int = 0
     metaswarm_children_last5m: int = 0
     metaswarm_children_seen: int = 0
+    metaswarm_children_completed: int = 0
+    metaswarm_children_failed: int = 0
     metaswarm_children_stale: int = 0
     live_agents: List[LiveAgent] = None
     commander_alerts: List[Dict[str, str]] = None
@@ -2346,14 +2393,7 @@ class MetricsEngine:
         # remain the preferred sources for long-lived runs.
         running_subagents_from_events = self.store.running_subagents_since(ts - LIVE_EVENT_WINDOW_S)
         def commander_is_active(c: MetaswarmCommander) -> bool:
-            status = (c.status or "").lower()
-            if status in TERMINAL_COMMANDER_STATUSES:
-                return False
-            if c.pid_status == "run":
-                return True
-            if c.pid_status == "dead":
-                return False
-            return c.status in {"running", "starting"} and (c.heartbeat_age_s is None or c.heartbeat_age_s < 90)
+            return metaswarm_commander_is_active(c)
 
         active_metaswarm_runs = [
             run
@@ -2380,6 +2420,16 @@ class MetricsEngine:
         )
         metaswarm_children_seen = sum(
             c.child_agents_seen
+            for run in display_metaswarm_runs
+            for c in run.commanders
+        )
+        metaswarm_children_completed = sum(
+            c.child_agents_completed
+            for run in display_metaswarm_runs
+            for c in run.commanders
+        )
+        metaswarm_children_failed = sum(
+            c.child_agents_failed
             for run in display_metaswarm_runs
             for c in run.commanders
         )
@@ -2494,7 +2544,11 @@ class MetricsEngine:
             if display_metaswarm_runs
             else live_level_counts.get("workers", 0)
         )
-        subagents_last5m = agent_events_last5m
+        subagents_last5m = (
+            metaswarm_children_last5m
+            if display_metaswarm_runs
+            else agent_events_last5m
+        )
         launch_level_counts_5m = self.store.agent_events_by_level_since(ts - 5 * 60)
 
         # Feature 1: Success rate
@@ -2573,6 +2627,8 @@ class MetricsEngine:
             metaswarm_children_running=metaswarm_children_running,
             metaswarm_children_last5m=metaswarm_children_last5m,
             metaswarm_children_seen=metaswarm_children_seen,
+            metaswarm_children_completed=metaswarm_children_completed,
+            metaswarm_children_failed=metaswarm_children_failed,
             metaswarm_children_stale=metaswarm_children_stale,
             live_agents=live_agents,
             commander_alerts=commander_alerts,
@@ -2634,11 +2690,13 @@ class NeonLogo(Static):
                 (str(levels.get("other", 0)), "bold #8D99AE"),
                 (" · seen ", "#8D99AE"),
                 (str(m.metaswarm_children_seen), "bold #00F5D4"),
+                (" · done ", "#8D99AE"),
+                (str(m.metaswarm_children_completed), "bold #7CFF6B"),
                 (" · stale ", "#8D99AE"),
                 (str(m.metaswarm_children_stale), "bold #FFD166"),
             )
             metrics_line_3 = Text.assemble(
-                ("launch events 5m ", "#8D99AE"),
+                ("sub-agent launches 5m ", "#8D99AE"),
                 (str(m.subagents_last5m), "bold #00F5D4"),
                 (" · velocity ", "#8D99AE"),
                 (f"{m.velocity}/hr", "bold #FFD166"),
@@ -2732,9 +2790,14 @@ class StatPanel(Static):
             bar(levels.get("squad_leads", 0)),
         )
         t.add_row(
-            Text("Sub-agents      :", style="bold white"),
+            Text("Sub-agents running:", style="bold white"),
             Text(str(levels.get("workers", 0)), style="bold #7CFF6B"),
             bar(levels.get("workers", 0)),
+        )
+        t.add_row(
+            Text("Sub-agents seen :", style="bold white"),
+            Text(str(m.metaswarm_children_seen), style="bold #00F5D4"),
+            Text(f"done {m.metaswarm_children_completed} · stale {m.metaswarm_children_stale}", style="#8D99AE"),
         )
         t.add_row(
             Text("Reviewers       :", style="bold white"),
@@ -2747,7 +2810,7 @@ class StatPanel(Static):
             bar(levels.get("other", 0)),
         )
         t.add_row(
-            Text("Launch events 5m:", style="bold white"),
+            Text("Sub-agent launches 5m:", style="bold white"),
             Text(str(m.subagents_last5m), style="bold #00F5D4"),
             bar(m.subagents_last5m),
         )
@@ -3109,6 +3172,8 @@ class LiveRunsPanel(Static):
             f"Stampede ledgers: {m.metaswarm_active_commanders}/{commander_total} commanders · "
             f"{m.metaswarm_children_seen} sub-agents seen · "
             f"{m.metaswarm_children_running} running · "
+            f"{m.metaswarm_children_completed} done · "
+            f"{m.metaswarm_children_failed} failed · "
             f"{m.metaswarm_children_stale} stale · "
             f"{m.metaswarm_children_last5m} sub-agent launches in 5m",
             style="#8D99AE",
@@ -3471,10 +3536,14 @@ class AgentPulseApp(App):
                     "active_commanders": m.metaswarm_active_commanders,
                     "sub_agents_seen": m.metaswarm_children_seen,
                     "sub_agents_running": m.metaswarm_children_running,
+                    "sub_agents_completed": m.metaswarm_children_completed,
+                    "sub_agents_failed": m.metaswarm_children_failed,
                     "sub_agents_stale": m.metaswarm_children_stale,
                     "sub_agents_last5m": m.metaswarm_children_last5m,
                     "children_seen": m.metaswarm_children_seen,
                     "children_running": m.metaswarm_children_running,
+                    "children_completed": m.metaswarm_children_completed,
+                    "children_failed": m.metaswarm_children_failed,
                     "children_stale": m.metaswarm_children_stale,
                     "children_last5m": m.metaswarm_children_last5m,
                     "runs": [dataclasses.asdict(r) for r in m.metaswarm_runs],
@@ -3629,10 +3698,14 @@ def _mode_export() -> None:
             "total_commanders": m.metaswarm_total_commanders,
             "sub_agents_seen": m.metaswarm_children_seen,
             "sub_agents_running": m.metaswarm_children_running,
+            "sub_agents_completed": m.metaswarm_children_completed,
+            "sub_agents_failed": m.metaswarm_children_failed,
             "sub_agents_stale": m.metaswarm_children_stale,
             "sub_agents_last5m": m.metaswarm_children_last5m,
             "children_seen": m.metaswarm_children_seen,
             "children_running": m.metaswarm_children_running,
+            "children_completed": m.metaswarm_children_completed,
+            "children_failed": m.metaswarm_children_failed,
             "children_stale": m.metaswarm_children_stale,
             "children_last5m": m.metaswarm_children_last5m,
             "runs": [dataclasses.asdict(r) for r in m.metaswarm_runs],
